@@ -5,5 +5,4 @@ pandas>=2.2.3
 polars==1.27.1
 tensordict==0.7.0
 torch>=2.6.0
-torchrl==0.7.0
 tqdm>=4.67.1
