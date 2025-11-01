@@ -175,7 +175,4 @@ cython_debug/
 
 .DS_Store
 
-#results/
-cond1/
-open1/
-open2/
+results/
