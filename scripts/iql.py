@@ -25,6 +25,7 @@ from utils                  import print_agent_counts
 
 # Main script to run the IQL experiment
 if __name__ == "__main__":
+    cl = " ".join(sys.argv)
     parser = argparse.ArgumentParser()
     parser.add_argument('--id', type=str, required=True)
     parser.add_argument('--env-conf', type=str, default="config1")
@@ -128,6 +129,9 @@ if __name__ == "__main__":
     dump_config["algorithm"] = ALGORITHM
     dump_config["num_agents"] = num_agents
     dump_config["num_machines"] = num_machines
+    dump_config["phases"] = phases
+    dump_config["phase_names"] = phase_names
+    dump_config["command"] = cl
     with open(exp_config_path, 'w', encoding='utf-8') as f:
         json.dump(dump_config, f, indent=4)
 

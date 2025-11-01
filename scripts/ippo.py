@@ -15,104 +15,18 @@ import random
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
-import torch.optim as optim
 
-from routerl         import TrafficEnvironment
-from tqdm            import tqdm
+from routerl                import TrafficEnvironment
+from tqdm                   import tqdm
 
-from baseline_models import BaseLearningModel
-from iql             import Network
-from utils           import clear_SUMO_files
-from utils           import print_agent_counts
+from algorithms.simple_ppo  import PPO
+from utils                  import clear_SUMO_files
+from utils                  import print_agent_counts
 
-### A simplified single-step actor-only PPO implementation for single-step decisions.
-class PPO(BaseLearningModel):
-    def __init__(self, state_size, action_space_size,
-                 device="cpu", batch_size=16, lr=0.003, num_epochs=4, 
-                 num_hidden=2, widths=[32, 64, 32], clip_eps=0.2, 
-                 normalize_advantage=True, entropy_coef=0.3):
-        super().__init__()
-        self.device = device
-        self.action_space_size = action_space_size
-        self.batch_size = batch_size
-        self.num_epochs = num_epochs
-        self.clip_eps = clip_eps
-        self.normalize_advantage = normalize_advantage
-        self.entropy_coef = entropy_coef
 
-        self.policy_net = Network(state_size, action_space_size, num_hidden, widths).to(self.device)
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
-        self.softmax = nn.Softmax(dim=-1)
-        
-        self.loss = list()
-        self.memory = list()
-        self.deterministic = False
-
-    def act(self, state):
-        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-        with torch.no_grad():
-            logits = self.policy_net(state_tensor)
-            #logits = torch.clamp(logits, -10, 10)
-            #logits = (logits - logits.min()) / (logits.max() - logits.min())
-            #self.logits = logits
-            probs = self.softmax(logits)
-        dist = torch.distributions.Categorical(probs)
-        if not self.deterministic: action = dist.sample().item()
-        else: action = torch.argmax(probs).item()
-        self.last_state = state
-        self.last_action = action
-        self.last_log_prob = dist.log_prob(torch.tensor(action)).item()
-        return action
-
-    def push(self, reward):
-        self.memory.append((self.last_state, self.last_action, self.last_log_prob, reward))
-        del self.last_state, self.last_action, self.last_log_prob
-
-    def learn(self):
-        if len(self.memory) < self.batch_size: return
-        step_loss = list()
-
-        for _ in range(self.num_epochs):
-            batch = random.sample(self.memory, self.batch_size)
-            states, actions, old_log_probs, rewards = zip(*batch)
-            states_tensor = torch.FloatTensor(states).to(self.device)
-            actions_tensor = torch.LongTensor(actions).to(self.device)
-            old_log_probs_tensor = torch.FloatTensor(old_log_probs).to(self.device)
-            rewards_tensor = torch.FloatTensor(rewards).to(self.device)
-            # print(f"""
-            # States: {states_tensor}, Actions: {actions_tensor},
-            # Old Log Probs: {old_log_probs_tensor}, Rewards: {rewards_tensor}
-            #       """)
-
-            logits = self.policy_net(states_tensor)
-            probs = self.softmax(logits)
-            dist = torch.distributions.Categorical(probs)
-            new_log_probs = dist.log_prob(actions_tensor)
-
-            ratio = torch.exp(new_log_probs - old_log_probs_tensor)
-            #advantage = rewards_tensor
-            if self.normalize_advantage: advantage = (rewards_tensor - rewards_tensor.mean()) / (rewards_tensor.std() + 1e-8)
-            else: advantage = rewards_tensor
-
-            surr1 = ratio * advantage
-            surr2 = torch.clamp(ratio, 1 - self.clip_eps, 1 + self.clip_eps) * advantage
-            #loss = -torch.min(surr1, surr2).mean()
-            entropy = dist.entropy().mean()
-            loss = -torch.min(surr1, surr2).mean() - self.entropy_coef * entropy
-
-            self.optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=1.0)
-            self.optimizer.step()
-            step_loss.append(loss.item())
-
-        self.loss.append(sum(step_loss) / len(step_loss))
-        self.memory.clear()
-    
-    
 # Main script to run the IPPO experiment
 if __name__ == "__main__":
+    cl = " ".join(sys.argv)
     parser = argparse.ArgumentParser()
     parser.add_argument('--id', type=str, required=True)
     parser.add_argument('--env-conf', type=str, default="config1")
@@ -216,6 +130,9 @@ if __name__ == "__main__":
     dump_config["algorithm"] = ALGORITHM
     dump_config["num_agents"] = num_agents
     dump_config["num_machines"] = num_machines
+    dump_config["phases"] = phases
+    dump_config["phase_names"] = phase_names
+    dump_config["command"] = cl
     with open(exp_config_path, 'w', encoding='utf-8') as f:
         json.dump(dump_config, f, indent=4)
 
