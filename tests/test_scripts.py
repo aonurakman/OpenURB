@@ -5,6 +5,8 @@ import subprocess
 
 from pathlib import Path
 
+# Executes every SUMO-aware script in the repository with a minimal config.
+
 SCRIPTS_DIR = Path("scripts")
 python_scripts = list(SCRIPTS_DIR.rglob("*.py"))
 excluded_scripts = ["utils.py", "base_script.py", "baselines.py", "open_iql.py", "cond_open_iql.py", "parallel_open_iql.py"]
@@ -15,9 +17,10 @@ python_scripts = [script for script in python_scripts if script.name not in excl
 
 @pytest.fixture(scope="session", autouse=True)
 def check_sumo_installed():
+    # Treat missing SUMO as a skip so the suite can still run elsewhere.
     sumo_executable = shutil.which("sumo")
     if sumo_executable is None:
-        pytest.exit("[SUMO ERROR] SUMO is not installed or not in PATH.")
+        pytest.skip("[SUMO SKIP] SUMO is not installed or not in PATH.", allow_module_level=True)
     else:
         try:
             result = subprocess.run(
@@ -25,11 +28,12 @@ def check_sumo_installed():
             )
             print(f"[DEBUG] SUMO version: {result.stdout.strip()}")
         except subprocess.CalledProcessError as e:
-            pytest.exit(f"[SUMO ERROR] Failed to get SUMO version: {e.stderr}")
+            pytest.skip(f"[SUMO SKIP] Failed to get SUMO version: {e.stderr}", allow_module_level=True)
 
 
 @pytest.mark.parametrize("script_path", python_scripts)
 def test_python_script_execution(script_path):
+    """Smoke test each script to ensure CLI arguments are accepted."""
     try:
         script_filename = script_path.name
         print(script_filename)

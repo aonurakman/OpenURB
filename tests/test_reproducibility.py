@@ -6,15 +6,18 @@ import subprocess
 
 from pathlib import Path
 
+# Confirms that running the conditioned OPEN script twice yields identical results.
+
 SCRIPTS_DIR = Path("scripts")
 RESULTS_DIR = Path("results")
 python_script = [SCRIPTS_DIR / "cond_open_iql.py"]
 
 @pytest.fixture(scope="session", autouse=True)
 def check_sumo_installed():
+    # Skip reproducibility checks when SUMO cannot be reached.
     sumo_executable = shutil.which("sumo")
     if sumo_executable is None:
-        pytest.exit("[SUMO ERROR] SUMO is not installed or not in PATH.")
+        pytest.skip("[SUMO SKIP] SUMO is not installed or not in PATH.", allow_module_level=True)
     else:
         try:
             result = subprocess.run(
@@ -22,11 +25,12 @@ def check_sumo_installed():
             )
             print(f"[DEBUG] SUMO version: {result.stdout.strip()}")
         except subprocess.CalledProcessError as e:
-            pytest.exit(f"[SUMO ERROR] Failed to get SUMO version: {e.stderr}")
+            pytest.skip(f"[SUMO SKIP] Failed to get SUMO version: {e.stderr}", allow_module_level=True)
 
 
 @pytest.mark.parametrize("script_path", python_script)
 def test_python_script_execution(script_path):
+    """Execute two identical runs and ensure the generated CSV outputs match."""
     script_filename = script_path.name
     id1 = f"test_{script_filename}1"
     id2 = f"test_{script_filename}2"

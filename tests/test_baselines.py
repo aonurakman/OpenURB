@@ -5,6 +5,8 @@ import subprocess
 
 from pathlib import Path
 
+# Exercises the CLI baseline runner for every registered baseline model.
+
 SCRIPTS_DIR = Path("scripts")
 python_script = SCRIPTS_DIR / "baselines.py"
 
@@ -14,9 +16,10 @@ baseline_names = [name for name in baseline_names if name.name not in ["__init__
 
 @pytest.fixture(scope="session", autouse=True)
 def check_sumo_installed():
+    # Bail out early when SUMO is not available in the environment.
     sumo_executable = shutil.which("sumo")
     if sumo_executable is None:
-        pytest.exit("[SUMO ERROR] SUMO is not installed or not in PATH.")
+        pytest.skip("[SUMO SKIP] SUMO is not installed or not in PATH.", allow_module_level=True)
     else:
         try:
             result = subprocess.run(
@@ -24,11 +27,12 @@ def check_sumo_installed():
             )
             print(f"[DEBUG] SUMO version: {result.stdout.strip()}")
         except subprocess.CalledProcessError as e:
-            pytest.exit(f"[SUMO ERROR] Failed to get SUMO version: {e.stderr}")
+            pytest.skip(f"[SUMO SKIP] Failed to get SUMO version: {e.stderr}", allow_module_level=True)
 
 
 @pytest.mark.parametrize("baseline", baseline_names)
 def test_python_script_execution(baseline):
+    """Run the baselines launcher for each baseline script entry."""
     try:
         script_filename = python_script.name
         baseline_name = baseline.name.split(".")[0]
