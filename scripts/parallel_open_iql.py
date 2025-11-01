@@ -19,20 +19,21 @@ import pandas as pd
 import polars as pl
 import torch
 
-from multiprocessing     import Pool, Manager
-from routerl             import Keychain as kc
-from routerl             import Recorder
-from routerl             import SumoSimulator
-from routerl             import TrafficEnvironment
-from routerl             import MachineAgent
-from tqdm                import tqdm
+from multiprocessing        import Pool, Manager
+from routerl                import Keychain as kc
+from routerl                import Recorder
+from routerl                import SumoSimulator
+from routerl                import TrafficEnvironment
+from routerl                import MachineAgent
+from tqdm                   import tqdm
 
-from open_iql            import DQN
-from utils               import clear_SUMO_files
-from utils               import print_agent_counts
+from algorithms.simple_dqn  import DQN
+from utils                  import clear_SUMO_files
+from utils                  import print_agent_counts
     
 # Main script to run the IQL experiment
 if __name__ == "__main__":
+    cl = " ".join(sys.argv)
     parser = argparse.ArgumentParser()
     parser.add_argument('--id', type=str, required=True)
     parser.add_argument('--env-conf', type=str, default="config1")
@@ -150,6 +151,7 @@ if __name__ == "__main__":
     dump_config["num_machines"] = num_machines
     dump_config["phases"] = phases
     dump_config["phase_names"] = phase_names
+    dump_config["command"] = cl
     with open(exp_config_path, 'w', encoding='utf-8') as f:
         json.dump(dump_config, f, indent=4)
 
@@ -258,7 +260,7 @@ if __name__ == "__main__":
             observation, reward, termination, truncation, info = env.last()
             
             if termination or truncation:
-                agent_lookup[agent_id].model.push(-reward)
+                agent_lookup[agent_id].model.push(reward)
                 if episode % update_every == 0:
                     agent_lookup[agent_id].model.learn()
                 action = None
