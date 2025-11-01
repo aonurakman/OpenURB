@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- generated on 2025-11-01 15:22:36 by Eclipse SUMO sumo Version 1.22.0
+<sumoConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
+
+    <input>
+        <net-file value="../networks/saint_arnoult/saint_arnoult.net.xml"/>
+        <additional-files value="../results/sample_results/det.add.xml,../results/sample_results/route.rou.xml"/>
+    </input>
+
+    <output>
+        <tripinfo-output value="../results/sample_results/SUMO_output/detailed_sumo_stats_42.xml"/>
+        <statistic-output value="../results/sample_results/SUMO_output/sumo_stats_42.xml"/>
+    </output>
+
+    <processing>
+        <time-to-teleport value="-1"/>
+    </processing>
+
+    <report>
+        <no-step-log value="true"/>
+    </report>
+
+    <random_number>
+        <seed value="810"/>
+    </random_number>
+
+</sumoConfiguration>
+-->
+
+<statistics xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/statistic_file.xsd">
+    <performance clockBegin="1762006956.26" clockEnd="1762006957.88" clockDuration="1.62" traciDuration="1.50" realTimeFactor="1324.49" vehicleUpdatesPerSecond="29126.47" personUpdatesPerSecond="0.00" begin="0.00" end="2147.00" duration="2147.00"/>
+    <vehicles loaded="222" inserted="222" running="0" waiting="0"/>
+    <teleports total="0" jam="0" yield="0" wrongLane="0"/>
+    <safety collisions="0" emergencyStops="0" emergencyBraking="0"/>
+    <persons loaded="0" running="0" jammed="0"/>
+    <personTeleports total="0" abortWait="0" wrongDest="0"/>
+    <vehicleTripStatistics count="222" routeLength="1689.06" speed="8.06" duration="212.68" waitingTime="0.86" timeLoss="28.68" departDelay="0.06" departDelayWaiting="-1.00" totalTravelTime="47214.00" totalDepartDelay="14.00"/>
+    <pedestrianStatistics number="0" routeLength="0.00" duration="0.00" timeLoss="0.00"/>
+    <rideStatistics number="0"/>
+    <transportStatistics number="0"/>
+</statistics>
