@@ -7,10 +7,10 @@ Each experiment outputs set of raw records, which are then processed with the sc
 To use the analysis script, you have to provide in the command line the following command:
 
 ```bash
-python analysis/metrics.py --id <exp_id> --verbose <verbose> --results-folder <results-folder> --skip-clearing <skip-clearing> --skip-collecting <skip-collecting>
+python analysis/metrics.py --id <exp_id> --verbose <verbose> --results-folder <results-folder> --skip-collecting <skip-collecting>
 ```
 
-that will collect the results from the experiment with identifier ```<exp_id>``` and save them in the folder ```<exp_id>/metrics/```. The ```--verbose``` flag is optional and if set to ```True``` will print additional information about the analysis process. Flag ```--results-folder``` is optional and if set to ```True``` will use the folder ```<results-folder>``` instead of the default one ```results/```. The flags ```--skip-clearing``` and ```--skip-collecting``` are optional and if set to ```True``` will skip clearing and collecting the results from the experiment, respectively. Those operations have to be done only once, so if you are running the analysis script multiple times, you can skip them.
+that will collect the results from the experiment with identifier ```<exp_id>``` and save them in the folder ```<exp_id>/metrics/```. The ```--verbose``` flag is optional and if set to ```True``` will print additional information about the analysis process. Flag ```--results-folder``` is optional and if set to ```True``` will use the folder ```<results-folder>``` instead of the default one ```results/```. The flag ```--skip-collecting``` is optional and if set to ```True``` will skip collecting the results from the experiment into single ```.csv``` file. This operation has to be done only once, so if you are running the analysis script more than once, you can skip this step.
 
 #### Reported indicators
 ---
@@ -26,3 +26,11 @@ To better understand the causes of the changes in travel time, we track the _Ave
 
 We measure the _Cost of training_, expressed as the average of: $\sum_{\tau \in train}(t^\tau_a - \hat{t}^{pre}_a)$ over all agents $a$, i.e. the cumulated disturbance that CAV cause during the training period. We define $c\_{CAV}$ and $c\_{HDV}$ accordingly.
 We call an experiment _won_ by CAVs if their policy was on average faster than human drivers' behaviour. A final _winrate_ is a percentage of runs that were won by CAVs.
+
+#### Units of measurement
+---
+
+All the metrics are expressed in the following units:
+- Time: minutes
+- Distance: kilometers
+- Speed: kilometers per hour
