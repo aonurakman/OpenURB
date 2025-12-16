@@ -31,6 +31,8 @@ from tqdm                   import tqdm
 from algorithms.simple_dqn  import DQN
 from utils                  import clear_SUMO_files
 from utils                  import print_agent_counts
+from utils                  import start_runtime_tracking
+from utils                  import finish_runtime_tracking
 
 # Main script to run the IQL experiment
 if __name__ == "__main__":
@@ -104,6 +106,7 @@ if __name__ == "__main__":
     records_folder = f"../results/{exp_id}"
     plots_folder = f"../results/{exp_id}/plots"
     os.makedirs(plots_folder, exist_ok=True)
+    runtime_tracker = start_runtime_tracking(records_folder, exp_id, __file__, alg_config, task_config, env_config)
     
     # To be used for tracking switches between groups
     shifts_path = os.path.join(records_folder, "shifts.csv")
@@ -378,3 +381,4 @@ if __name__ == "__main__":
     losses_pd.to_csv(os.path.join(records_folder, "losses.csv"), index=False)
     env.stop_simulation()
     clear_SUMO_files(os.path.join(records_folder, "SUMO_output"), os.path.join(records_folder, "episodes"), remove_additional_files=True)
+    finish_runtime_tracking(runtime_tracker)

@@ -22,6 +22,8 @@ from tqdm                   import tqdm
 from algorithms.simple_ppo  import PPO
 from utils                  import clear_SUMO_files
 from utils                  import print_agent_counts
+from utils                  import start_runtime_tracking
+from utils                  import finish_runtime_tracking
 
 
 # Main script to run the IPPO experiment
@@ -90,6 +92,7 @@ if __name__ == "__main__":
     phase_names = ["Human stabilization", "Mutation and AV learning", "Testing phase"]
     records_folder = f"../results/{exp_id}"
     plots_folder = f"../results/{exp_id}/plots"
+    runtime_tracker = start_runtime_tracking(records_folder, exp_id, __file__, alg_config, task_config, env_config)
 
     # Read origin-destinations
     od_file_path = os.path.join(custom_network_folder, f"od_{network}.txt")
@@ -253,3 +256,4 @@ if __name__ == "__main__":
     losses_pd.to_csv(os.path.join(records_folder, "losses.csv"), index=False)
     env.stop_simulation()
     clear_SUMO_files(os.path.join(records_folder, "SUMO_output"), os.path.join(records_folder, "episodes"), remove_additional_files=True)
+    finish_runtime_tracking(runtime_tracker)
