@@ -97,6 +97,30 @@ python scripts/iql.py --id deneme --alg-conf config1 --task-conf config4 --net s
 
 > Some scripts are compatible with only some certain task configurations. For example, scripts with "open" in the name work only with task configurations with "dynamic" in the name. 
 
+#### Optional: Weights & Biases logging (IQL)
+
+`scripts/iql_wb.py` mirrors `scripts/iql.py` but streams lightweight metrics to Weights & Biases. It logs per-episode mean rewards and travel times for each agent kind (Human/AV) as episodes are written to disk.
+
+1. Create `wandb_config.json` in the repo root (gitignored) with your W&B settings:
+
+```json
+{
+  "api_key": "YOUR_WANDB_API_KEY",
+  "project": "openurb",
+  "entity": "your_team_or_user"
+}
+```
+
+   Alternatively, set the `WANDB_API_KEY` environment variable and omit `api_key` from the file.
+
+2. Run:
+
+```bash
+python scripts/iql_wb.py --id <exp_id> --alg-conf <hyperparam_id> --task-conf <task_id> --net <net_name> [--env-conf <env_conf_id>] [--env-seed <env_seed>] [--torch-seed <torch_seed>] [--wandb-config <path>] [--no-wandb]
+```
+
+Use `--no-wandb` to disable logging while keeping the original disk outputs.
+
 ####  Usage **URB** for baselines
 
 Similarly as for RL algorithms, you have to provide command, but there is one additional flag ```model``` for ```scripts/baselines.py```, instead of ```torch-seed```, then you have command of form:
