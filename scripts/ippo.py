@@ -15,7 +15,6 @@ import random
 import numpy as np
 import pandas as pd
 import torch
-
 from routerl                import TrafficEnvironment
 from tqdm                   import tqdm
 
