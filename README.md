@@ -1,9 +1,8 @@
-# Forked from:
-<p align="center">
-  <img src="docs/urb.png" align="center" width="30%"/>
-</p>
+##### Forked from [URB](https://urbenchmark.com)
 
----
+<p align="center">
+  <img src="docs/openurb.png" align="center" width="30%"/>
+</p>
 
 # OpenURB
 
