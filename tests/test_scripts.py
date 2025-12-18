@@ -9,7 +9,7 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path("scripts")
 python_scripts = list(SCRIPTS_DIR.rglob("*.py"))
-excluded_scripts = ["utils.py", "base_script.py", "baselines.py", "open_iql.py", "cond_open_iql.py", "parallel_open_iql.py"]
+excluded_scripts = ["utils.py", "base_script.py", "baselines.py", "open_iql.py", "cond_open_iql.py", "open_ippo.py", "cond_open_ippo.py"]
 
 print(f"[DEBUG] Looking for Python scripts in {SCRIPTS_DIR.resolve()}")
 print(f"[DEBUG] Found {len(python_scripts)} Python scripts (excluding {len(excluded_scripts)} scripts).")

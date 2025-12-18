@@ -9,6 +9,7 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path("scripts")
 python_script = [SCRIPTS_DIR / "open_iql.py", SCRIPTS_DIR / "cond_open_iql.py"]
+python_script += [SCRIPTS_DIR / "open_ippo.py", SCRIPTS_DIR / "cond_open_ippo.py"]
 
 @pytest.fixture(scope="session", autouse=True)
 def check_sumo_installed():
