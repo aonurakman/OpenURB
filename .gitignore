@@ -175,6 +175,16 @@ cython_debug/
 
 .DS_Store
 
-results/
+#results/
+detector/
+episodes/
+SUMO_output/
+agents.csv
+det.add.xml
+losses.csv
+route.rou.xml
+routes.csv
+
+# wandb secrets
 wandb/
 wandb_config.json
