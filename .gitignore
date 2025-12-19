@@ -184,6 +184,7 @@ det.add.xml
 losses.csv
 route.rou.xml
 routes.csv
+combined_data.csv
 
 # wandb secrets
 wandb/
