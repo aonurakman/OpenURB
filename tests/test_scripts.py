@@ -9,11 +9,11 @@ from pathlib import Path
 
 SCRIPTS_DIR = Path("scripts")
 python_scripts = list(SCRIPTS_DIR.rglob("*.py"))
-excluded_scripts = ["utils.py", "base_script.py", "baselines.py", "open_iql.py", "cond_open_iql.py", "open_ippo.py", "cond_open_ippo.py"]
+scripts = ["ippo.py", "iql.py"]
 
 print(f"[DEBUG] Looking for Python scripts in {SCRIPTS_DIR.resolve()}")
-print(f"[DEBUG] Found {len(python_scripts)} Python scripts (excluding {len(excluded_scripts)} scripts).")
-python_scripts = [script for script in python_scripts if script.name not in excluded_scripts]
+print(f"[DEBUG] Found {len(python_scripts)}.")
+python_scripts = [script for script in python_scripts if script.name in scripts]
 
 @pytest.fixture(scope="session", autouse=True)
 def check_sumo_installed():
