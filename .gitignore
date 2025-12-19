@@ -189,3 +189,6 @@ combined_data.csv
 # wandb secrets
 wandb/
 wandb_config.json
+
+# Local copy of leaderboard
+leaderboard_site/
