@@ -77,6 +77,7 @@ def collect_experiments(results_dir: Path) -> List[Dict]:
                 "task_config": config.get("task_config"),
                 "network": config.get("network"),
                 "algorithm": config.get("algorithm"),
+                "script": config.get("script").split("/")[-1],
                 "alg_config": config.get("alg_config")
                 or config.get("algorithm_config")
                 or config.get("algorithm_configuration")
@@ -309,7 +310,7 @@ def build_html(payload: Dict, output_path: Path) -> None:
     <div class="card hero">
       <img src="openurb.png" alt="OpenURB logo">
       <p>
-        OpenURB benchmarks mixed traffic where human-driven vehicles optimize individual travel time while AVs collaborate to minimize group travel time under dynamic population shifts. Leaderboards below compare algorithms across environment configurations, task dynamics, and traffic networks using benchmark KPIs.
+        OpenURB benchmarks mixed traffic where human-driven vehicles optimize individual travel time while AVs collaborate to minimize group travel time under dynamic population shifts. Leaderboards below compare algorithms across environment configurations, different tasks, and traffic networks using benchmark KPIs.
       </p>
     </div>
 
@@ -410,6 +411,7 @@ def build_html(payload: Dict, output_path: Path) -> None:
       const baseHeaders = [
         { key: 'exp_id', label: 'Exp ID' },
         { key: 'algorithm', label: 'Algorithm' },
+        { key: `script`, label: 'Script' },
         { key: 'alg_config', label: 'Algorithm Config' },
         { key: 'env_seed', label: 'Env Seed' },
         { key: 'torch_seed', label: 'Torch Seed' },
@@ -437,6 +439,7 @@ def build_html(payload: Dict, output_path: Path) -> None:
         const cells = [
           `<a href="${exp.exp_link || exp.exp_path}" target="_blank" rel="noopener">${exp.exp_id}</a>`,
           exp.algorithm || 'N/A',
+          exp.script || 'N/A',
           exp.alg_config || 'N/A',
           exp.env_seed ?? 'N/A',
           exp.torch_seed ?? 'N/A',
