@@ -1,0 +1,22 @@
+{
+    "experiment": {
+        "id": "open_ippo_3",
+        "script": "open_ippo.py",
+        "alg_config": "config3",
+        "task_config": "dynamic1",
+        "env_config": "config1"
+    },
+    "timing": {
+        "start_local": "2026-01-07 16:06:01 CET",
+        "end_local": "2026-01-07 22:45:02 CET",
+        "duration": "06:39:01.111"
+    },
+    "resources": {
+        "cpu_user_sec": 4739.353,
+        "cpu_system_sec": 1999.278,
+        "voluntary_context_switches": 352926177,
+        "involuntary_context_switches": 48692274,
+        "peak_memory_mb": 417.812,
+        "records_folder_size_mb": 113.346
+    }
+}

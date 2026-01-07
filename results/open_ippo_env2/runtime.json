@@ -1,6 +1,6 @@
 {
     "experiment": {
-        "id": "open_ippo",
+        "id": "open_ippo_env2",
         "script": "open_ippo.py",
         "alg_config": "config1",
         "task_config": "dynamic1",
