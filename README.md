@@ -97,9 +97,9 @@ python scripts/iql.py --id deneme --alg-conf config1 --task-conf config4 --net s
 
 > Some scripts are compatible with only some certain task configurations. For example, scripts with "open" in the name work only with task configurations with "dynamic" in the name. 
 
-#### Optional: Weights & Biases logging (IQL)
+#### Optional: Weights & Biases logging
 
-`scripts/iql_wb.py` mirrors `scripts/iql.py` but streams lightweight metrics to Weights & Biases. It logs per-episode mean rewards and travel times for each agent kind (Human/AV) as episodes are written to disk.
+All experiment scripts support optional Weights & Biases logging and will stream per-episode mean rewards and travel times (overall + by agent kind) as episode CSVs are written to disk. Use `--no-wandb` to disable logging if you do not want W&B integration or if `wandb` is not installed. `scripts/iql_wb.py` remains as a drop-in alias for `scripts/iql.py` with the same flags.
 
 1. Create `wandb_config.json` in the repo root (gitignored) with your W&B settings:
 
@@ -116,7 +116,7 @@ python scripts/iql.py --id deneme --alg-conf config1 --task-conf config4 --net s
 2. Run:
 
 ```bash
-python scripts/iql_wb.py --id <exp_id> --alg-conf <hyperparam_id> --task-conf <task_id> --net <net_name> [--env-conf <env_conf_id>] [--env-seed <env_seed>] [--torch-seed <torch_seed>] [--wandb-config <path>] [--no-wandb]
+python scripts/iql.py --id <exp_id> --alg-conf <hyperparam_id> --task-conf <task_id> --net <net_name> [--env-conf <env_conf_id>] [--env-seed <env_seed>] [--torch-seed <torch_seed>] [--wandb-config <path>] [--no-wandb]
 ```
 
 Use `--no-wandb` to disable logging while keeping the original disk outputs.

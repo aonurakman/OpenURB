@@ -17,3 +17,7 @@ Model options consist:
     * ```random``` model which is fully undeterministic,
 * **Additionally, available from `RouteRL`**
     * ```gawron``` model is based on: `Gawron (1998) <https://kups.ub.uni-koeln.de/9257/>`, the model iteratively shifts the cost expectations towards the received reward.
+
+### Optional: Weights & Biases logging
+
+All experiment scripts accept `--wandb-config` and `--no-wandb` flags. When enabled, they log per-episode mean rewards and travel times (overall + by agent kind) as episode CSVs are written to disk. Use `--no-wandb` to disable logging or if `wandb` is not installed. `iql_wb.py` remains as a drop-in alias for `iql.py`. The default config file is `wandb_config.json` in the repo root (see the root README for details).

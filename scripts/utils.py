@@ -1,16 +1,21 @@
 import xml.etree.ElementTree as ET
+import glob
 import os
 import json
 import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional, Any, Dict
 
 try:
     import resource
 except ImportError:  # pragma: no cover - Windows compatibility
     resource = None
+try:
+    import wandb
+except ImportError:
+    wandb = None
 
 
 @dataclass
@@ -103,6 +108,101 @@ def finish_runtime_tracking(runtime_tracker: RuntimeTracker) -> None:
 
     with open(runtime_path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, indent=4)
+
+
+def load_wandb_secrets(config_path: str) -> Dict[str, str]:
+    """Load W&B credentials/project defaults from json if it exists."""
+    if not os.path.exists(config_path):
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def init_wandb_run(wandb_config_path: str, run_name: str, config: Dict[str, Any],
+                   disabled: bool = False):
+    """Initialize a Weights & Biases run and return the run handle (or None)."""
+    if disabled:
+        return None
+    if wandb is None:
+        raise ImportError("wandb is not installed. Please install wandb or use --no-wandb.")
+    wb_secrets = load_wandb_secrets(wandb_config_path)
+    api_key = wb_secrets.get("api_key")
+    if api_key:
+        wandb.login(key=api_key, relogin=True)
+    wb_kwargs = {
+        "project": wb_secrets.get("project", "openurb"),
+        "entity": wb_secrets.get("entity"),
+        "name": run_name,
+        "config": config,
+    }
+    wb_kwargs = {k: v for k, v in wb_kwargs.items() if v is not None}
+    wb_run = wandb.init(**wb_kwargs)
+    wb_run.log({"status": "started"}, step=0)
+    return wb_run
+
+
+def ensure_recorder_flush(env) -> None:
+    """Wait for any pending async Recorder writes so episode files are ready."""
+    pending = getattr(env, "pending_futures", None)
+    if not pending:
+        return
+    for future in list(pending):
+        future.result()
+    env.pending_futures = []
+
+
+def log_new_episodes(wb_run, episodes_folder: str, last_logged: int,
+                     phase: str, env) -> int:
+    """Log per-episode mean rewards/travel_times grouped by agent kind."""
+    if wb_run is None:
+        return last_logged
+
+    ensure_recorder_flush(env)
+
+    ep_files = glob.glob(os.path.join(episodes_folder, "ep*.csv"))
+    if not ep_files:
+        return last_logged
+
+    try:
+        import pandas as pd
+    except ImportError:
+        return last_logged
+
+    ep_entries = []
+    for ep_path in ep_files:
+        try:
+            ep_num = int(os.path.basename(ep_path).split("ep")[1].split(".csv")[0])
+            ep_entries.append((ep_num, ep_path))
+        except Exception:
+            continue
+
+    for ep_num, ep_path in sorted(ep_entries):
+        if ep_num <= last_logged:
+            continue
+        df = pd.read_csv(ep_path)
+        metrics = {
+            "episode": ep_num,
+            f"{phase}/reward/all": df["reward"].mean(),
+            f"{phase}/travel_time/all": df["travel_time"].mean(),
+        }
+        for kind, group in df.groupby("kind"):
+            kind_key = str(kind).lower()
+            metrics[f"{phase}/reward/{kind_key}"] = group["reward"].mean()
+            metrics[f"{phase}/travel_time/{kind_key}"] = group["travel_time"].mean()
+        wb_run.log(metrics, step=ep_num)
+        last_logged = ep_num
+
+    return last_logged
+
+
+def finish_wandb_run(wb_run, last_logged: int) -> None:
+    if wb_run is None:
+        return
+    wb_run.log({"status": "finished"}, step=last_logged + 1)
+    wb_run.finish()
 
 def get_episodes(ep_path: str) -> list[int]:
     """Get the episodes data

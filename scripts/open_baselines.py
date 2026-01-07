@@ -30,6 +30,10 @@ from routerl import MachineAgent
 from tqdm import tqdm
 
 from utils import clear_SUMO_files
+from utils import ensure_recorder_flush
+from utils import finish_wandb_run
+from utils import init_wandb_run
+from utils import log_new_episodes
 from utils import start_runtime_tracking
 from utils import finish_runtime_tracking
 from baseline_models import get_baseline
@@ -44,6 +48,8 @@ if __name__ == "__main__":
     parser.add_argument('--net', type=str, required=True)
     parser.add_argument('--env-seed', type=int, default=42)
     parser.add_argument('--model', type=str, required=True)
+    parser.add_argument('--wandb-config', type=str, default=os.path.join(repo_root, "wandb_config.json"))
+    parser.add_argument('--no-wandb', action='store_true', help="Disable Weights & Biases logging.")
     args = parser.parse_args()
     ALGORITHM = "baseline"
     EXP_TYPE = "open"
@@ -54,6 +60,8 @@ if __name__ == "__main__":
     network = args.net
     env_seed = args.env_seed
     baseline_model = args.model
+    wb_run = None
+    last_logged_episode = 0
     print("### STARTING EXPERIMENT ###")
     print(f"Experiment ID: {exp_id}")
     print(f"Network: {network}")
@@ -100,6 +108,7 @@ if __name__ == "__main__":
     phase_names = ["Human stabilization", "Mutation and AV stabilization", "Dynamic switches", "Testing phase"]
     records_folder = f"../results/{exp_id}"
     plots_folder = f"../results/{exp_id}/plots"
+    episodes_folder = os.path.join(records_folder, "episodes")
     os.makedirs(plots_folder, exist_ok=True)
     runtime_tracker = start_runtime_tracking(records_folder, exp_id, __file__, alg_config, task_config, env_config)
     
@@ -155,6 +164,8 @@ if __name__ == "__main__":
     dump_config["command"] = cl
     with open(exp_config_path, 'w', encoding='utf-8') as f:
         json.dump(dump_config, f, indent=4)
+
+    wb_run = init_wandb_run(args.wandb_config, exp_id, dump_config, args.no_wandb)
 
     # Initiate the traffic environment
     env = TrafficEnvironment(
@@ -217,6 +228,9 @@ if __name__ == "__main__":
     for episode in range(human_learning_episodes):
         env.step()
         pbar.update()
+        last_logged_episode = log_new_episodes(
+            wb_run, episodes_folder, last_logged_episode, "human_learning", env
+        )
 
     ######### Mutation ########
     # We make object copies, in case they switch back, they will start where they left off
@@ -342,6 +356,10 @@ if __name__ == "__main__":
             shifts_df.write_csv(shifts_path)
             ##############################
         pbar.update()
+        phase_label = "training" if episode < training_eps else "dynamic"
+        last_logged_episode = log_new_episodes(
+            wb_run, episodes_folder, last_logged_episode, phase_label, env
+        )
     ###############################################
     
     
@@ -359,6 +377,9 @@ if __name__ == "__main__":
                 action = mutated_humans[agent].act(0)
             env.step(action)
         pbar.update()
+        last_logged_episode = log_new_episodes(
+            wb_run, episodes_folder, last_logged_episode, "testing", env
+        )
     ###############################
 
     pbar.close()
@@ -366,5 +387,10 @@ if __name__ == "__main__":
 
     env.stop_simulation()
 
-    clear_SUMO_files(os.path.join(records_folder, "SUMO_output"), os.path.join(records_folder, "episodes"), remove_additional_files=True)
+    clear_SUMO_files(os.path.join(records_folder, "SUMO_output"), episodes_folder, remove_additional_files=True)
     finish_runtime_tracking(runtime_tracker)
+    ensure_recorder_flush(env)
+    last_logged_episode = log_new_episodes(
+        wb_run, episodes_folder, last_logged_episode, "final", env
+    )
+    finish_wandb_run(wb_run, last_logged_episode)
