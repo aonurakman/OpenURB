@@ -1,0 +1,13 @@
+{
+    "training_eps" : 1000,
+
+    "eps_init" : 0.95,
+    "eps_decay" : 0.997,
+    "buffer_size" : 256,
+    "batch_size" : 16,
+    "lr" : 0.004,
+    "num_epochs" : 1,
+    "num_hidden" : 1,
+    "widths" : [64, 64],
+    "update_every" : 1
+}
