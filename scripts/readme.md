@@ -1,13 +1,12 @@
 ### (MA)RL algorithms and baselines.
 
-We deliver here scripts for the experiment runs. Each associated algorithm with selected implementations from `TorchRL`:
-* ```ippo_torchrl.py``` uses Independent Proximal Policy Optimization algorithm,
-* ```mappo_torchrl.py``` uses Multi Agent Proximal Policy Optimization algorithm,
-* ```iql_torchrl.py``` uses Implicit Q-Learning algorithm,
-* ```qmix_torchrl.py``` uses QMIX algorithm,
-* ```vdn_torchrl.py``` uses Value Decomposition Network algorithm.
+We deliver here scripts for the experiment runs. The current training scripts are in-house and cover open vs. conditional switching variants:
+* ```open_ippo.py``` runs a simplified IPPO/PPO setup with open (predefined) switching between human and AV agents,
+* ```cond_open_ippo.py``` is the IPPO variant with switching conditioned on group travel times,
+* ```open_iql.py``` runs an IQL setup with open switching,
+* ```cond_open_iql.py``` is the conditional-switching version of the IQL setup.
 
-We selected five most promising RL algorithms implemented in `TorchRL` applicable for the class of `URB` problems. You can tune them, adjust, hyperparameterize and modify, or create own scripts.
+We currently provide two learning families (IPPO and IQL). You can tune them via `config/algo_config/` and extend this folder with your own scripts.
 
 Apart from RL algorithms, we provide baseline algorithms to compare with, can be used with ```open_baselines.py``` and ```cond_open_baselines.py```.
 The open variants run dynamic switching (conditional in the `cond_` version) and require task configs with `dynamic` in the name.

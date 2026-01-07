@@ -44,7 +44,8 @@ def test_python_script_execution(script_path, baseline):
              "--env-conf", "test",
              "--task-conf", "dynamic_test",
              "--net", "saint_arnoult",
-             "--model", baseline_name],
+             "--model", baseline_name,
+             "--no-wandb"],
             capture_output=True, text=True, check=True, cwd=script_path.parent
         )
         print(f"[DEBUG] Successfully executed baseline {baseline_name} with {script_path}")

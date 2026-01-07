@@ -38,7 +38,8 @@ def test_python_script_execution(script_path):
              "--alg-conf", "test",
              "--env-conf", "test",
              "--task-conf", "dynamic_test",
-             "--net", "saint_arnoult"],
+             "--net", "saint_arnoult",
+             "--no-wandb"],
             capture_output=True, text=True, check=True, cwd=script_path.parent
         )
         print(f"[DEBUG] Successfully executed {script_path}")
