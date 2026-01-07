@@ -5,10 +5,10 @@ import subprocess
 
 from pathlib import Path
 
-# Exercises the CLI baseline runner for every registered baseline model.
+# Exercises the OPEN baseline runners for every registered baseline model.
 
 SCRIPTS_DIR = Path("scripts")
-python_script = SCRIPTS_DIR / "baselines.py"
+python_scripts = [SCRIPTS_DIR / "open_baselines.py", SCRIPTS_DIR / "cond_open_baselines.py"]
 
 BASELINES_DIR = Path("baseline_models")
 baseline_names = list(BASELINES_DIR.rglob("*.py"))
@@ -30,22 +30,23 @@ def check_sumo_installed():
             pytest.skip(f"[SUMO SKIP] Failed to get SUMO version: {e.stderr}", allow_module_level=True)
 
 
+@pytest.mark.parametrize("script_path", python_scripts)
 @pytest.mark.parametrize("baseline", baseline_names)
-def test_python_script_execution(baseline):
-    """Run the baselines launcher for each baseline script entry."""
+def test_python_script_execution(script_path, baseline):
+    """Run the open baselines launchers for each baseline script entry."""
     try:
-        script_filename = python_script.name
+        script_filename = script_path.name
         baseline_name = baseline.name.split(".")[0]
         result = subprocess.run(
             ["python", script_filename,
-             "--id", f"test_{baseline_name}",
+             "--id", f"test_{script_filename}_{baseline_name}",
              "--alg-conf", "test",
              "--env-conf", "test",
-             "--task-conf", "test",
+             "--task-conf", "dynamic_test",
              "--net", "saint_arnoult",
              "--model", baseline_name],
-            capture_output=True, text=True, check=True, cwd=python_script.parent
+            capture_output=True, text=True, check=True, cwd=script_path.parent
         )
-        print(f"[DEBUG] Successfully executed baseline {baseline_name} with {python_script}")
+        print(f"[DEBUG] Successfully executed baseline {baseline_name} with {script_path}")
     except subprocess.CalledProcessError as e:
-        pytest.fail(f"[FAIL] Baseline {baseline_name} failed: {e.stderr}")
+        pytest.fail(f"[FAIL] Baseline {baseline_name} failed for {script_path}: {e.stderr}")

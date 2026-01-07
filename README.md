@@ -66,7 +66,7 @@ pip install --force-reinstall --no-cache-dir -r requirements.txt
 
 #### Usage of **OpenURB** for Reinforcement Learning algorithms
 
-To use **URB** while using RL algorithm, you have to provide in the command line the following command:
+To run the open/cond-open RL experiments, use:
 
 ```bash
 python scripts/<script_name>.py --id <exp_id> --alg-conf <hyperparam_id> --env-conf <env_conf_id> --task-conf <task_id> --net <net_name> --env-seed <env_seed> --torch-seed <torch_seed>
@@ -74,32 +74,32 @@ python scripts/<script_name>.py --id <exp_id> --alg-conf <hyperparam_id> --env-c
 
 where
 
-- ```<scipt_name>``` is the script you wish to run, available scripts are ```iql```, ```ippo```, ```open_iql```, ```cond_open_iql``` and ```parallel_open_iql```,
+- ```<scipt_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, and ```cond_open_ippo```,
 - ```<exp_id>``` is your own experiment identifier, for instance ```random_ing```, 
 - ```<hyperparam_id>``` is the hyperparameterization identifier, it must correspond to a `.json` filename (without extension) in [`config/algo_config`](config/algo_config/). Provided scripts automatically select the algorithm-specific subfolder in this directory.
 - ```<env_conf_id>``` is the environment configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/env_config`](config/env_config/). It is used to parameterize environment-specific processes, such as path generation, disk operations, etc. It is **optional** and by default is set to `config1`.
-- ```<task_id>``` is the task configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/task_config`](config/task_config/). It is used to parameterize the simulated scenario, such as portion of AVs, duration of human learning, AV behavior, etc.
+- ```<task_id>``` is the task configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/task_config`](config/task_config/). For this repo, use configs with `dynamic` in the name.
 - ```<net_name>``` is the name of the network you wish to use. Must be one of the folder names in ```networks/``` i.e. ```ing_small```, ```ingolstadt_custom```, ```nangis```, ```nemours```, ```provins``` or ```saint_arnoult```,
 - ```<env_seed>``` is reproducibility random seed for the traffic environment, it is **optional** and by default is set to 42,
 - ```<torch_seed>``` is reproducibility random seed for PyTorch, it is **optional** and by default is set to 42.
 
 For example, the following command runs an experiment using:
 - IQL algorithm, hyperparameterized by `config/algo_config/iql/config1.json`, 
-- The task specified in `config/task_config/config4.json`,
+- The task specified in `config/task_config/dynamic1.json`,
 - The environment parameterization specified in `config/env_config/config1.json` (by default),
 - Experiment identifier `deneme`, which will be used as the folder name in `results/` to save the experiment data,
 - Saint Arnoult network and demand, from `networks/saint_arnoult`,
 - Environment (also used for `random` and `numpy`) and PyTorch seeds 42 and 0, respectively.
 
 ```bash
-python scripts/iql.py --id deneme --alg-conf config1 --task-conf config4 --net saint_arnoult --env-seed 42 --torch-seed 0
+python scripts/open_iql.py --id deneme --alg-conf config1 --task-conf dynamic1 --net saint_arnoult --env-seed 42 --torch-seed 0
 ```
 
-> Some scripts are compatible with only some certain task configurations. For example, scripts with "open" in the name work only with task configurations with "dynamic" in the name. 
+> All experiment scripts in this repo expect task configs with `dynamic` in the name. 
 
 #### Optional: Weights & Biases logging
 
-All experiment scripts support optional Weights & Biases logging and will stream per-episode mean rewards and travel times (overall + by agent kind) as episode CSVs are written to disk. Use `--no-wandb` to disable logging if you do not want W&B integration or if `wandb` is not installed. `scripts/iql_wb.py` remains as a drop-in alias for `scripts/iql.py` with the same flags.
+All experiment scripts support optional Weights & Biases logging and will stream per-episode mean rewards and travel times (overall + by agent kind) as episode CSVs are written to disk. Use `--no-wandb` to disable logging if you do not want W&B integration or if `wandb` is not installed.
 
 1. Create `wandb_config.json` in the repo root (gitignored) with your W&B settings:
 
@@ -116,17 +116,17 @@ All experiment scripts support optional Weights & Biases logging and will stream
 2. Run:
 
 ```bash
-python scripts/iql.py --id <exp_id> --alg-conf <hyperparam_id> --task-conf <task_id> --net <net_name> [--env-conf <env_conf_id>] [--env-seed <env_seed>] [--torch-seed <torch_seed>] [--wandb-config <path>] [--no-wandb]
+python scripts/open_iql.py --id <exp_id> --alg-conf <hyperparam_id> --task-conf <task_id> --net <net_name> [--env-conf <env_conf_id>] [--env-seed <env_seed>] [--torch-seed <torch_seed>] [--wandb-config <path>] [--no-wandb]
 ```
 
 Use `--no-wandb` to disable logging while keeping the original disk outputs.
 
 ####  Usage **URB** for baselines
 
-Similarly as for RL algorithms, you have to provide command, but there is one additional flag ```model``` for ```scripts/baselines.py```, ```scripts/open_baselines.py```, and ```scripts/cond_open_baselines.py```, instead of ```torch-seed```, then you have command of form:
+Similarly as for RL algorithms, you have to provide command, but there is one additional flag ```model``` for ```scripts/open_baselines.py```, and ```scripts/cond_open_baselines.py```, instead of ```torch-seed```, then you have command of form:
 
 ```bash
-python scripts/baselines.py --id <exp_id> --alg-conf <hyperparam_id> --env-conf <env_conf_id> --task-conf <task_id> --net <net_name> --env-seed <env_seed> --model <model_name>
+python scripts/open_baselines.py --id <exp_id> --alg-conf <hyperparam_id> --env-conf <env_conf_id> --task-conf <task_id> --net <net_name> --env-seed <env_seed> --model <model_name>
 ```
 
 And ```<model_name>``` should be one of ```random```, ```aon``` (included in [baseline_models](baseline_models/)) or ```gawron``` (from [RouteRL](https://github.com/COeXISTENCE-PROJECT/RouteRL/blob/993423d101f39ea67a1f7373e6856af95a0602d4/routerl/human_learning/learning_model.py#L42)). 
@@ -135,7 +135,7 @@ The open baseline scripts mirror the dynamic switching behavior: use task config
 For example:
 
 ```bash
-python scripts/baselines.py --id ing_aon --alg-conf config1 --task-conf config2 --net ingolstadt_custom --model aon
+python scripts/open_baselines.py --id ing_aon --alg-conf config1 --task-conf dynamic2 --net ingolstadt_custom --model aon
 ```
 
 ## 🔁 Reproducing experiments

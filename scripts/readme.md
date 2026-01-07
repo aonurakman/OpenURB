@@ -9,7 +9,7 @@ We deliver here scripts for the experiment runs. Each associated algorithm with 
 
 We selected five most promising RL algorithms implemented in `TorchRL` applicable for the class of `URB` problems. You can tune them, adjust, hyperparameterize and modify, or create own scripts.
 
-Apart from RL algorithms, we provide baseline algorithms to compare with, can be used with ```baselines.py```, ```open_baselines.py```, and ```cond_open_baselines.py```.
+Apart from RL algorithms, we provide baseline algorithms to compare with, can be used with ```open_baselines.py``` and ```cond_open_baselines.py```.
 The open variants run dynamic switching (conditional in the `cond_` version) and require task configs with `dynamic` in the name.
 Model options consist:
 * **Baselines included in URB**
@@ -20,4 +20,4 @@ Model options consist:
 
 ### Optional: Weights & Biases logging
 
-All experiment scripts accept `--wandb-config` and `--no-wandb` flags. When enabled, they log per-episode mean rewards and travel times (overall + by agent kind) as episode CSVs are written to disk. Use `--no-wandb` to disable logging or if `wandb` is not installed. `iql_wb.py` remains as a drop-in alias for `iql.py`. The default config file is `wandb_config.json` in the repo root (see the root README for details).
+All experiment scripts accept `--wandb-config` and `--no-wandb` flags. When enabled, they log per-episode mean rewards and travel times (overall + by agent kind) as episode CSVs are written to disk. Use `--no-wandb` to disable logging or if `wandb` is not installed. The default config file is `wandb_config.json` in the repo root (see the root README for details).

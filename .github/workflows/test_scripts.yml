@@ -40,9 +40,6 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest
 
-      - name: Run standard script tests
-        run: python -m pytest -rs tests/test_scripts.py
-
       - name: Run dynamic script tests
         run: python -m pytest -rs tests/test_open_scripts.py
 
