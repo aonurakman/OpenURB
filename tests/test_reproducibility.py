@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 import shutil
 import subprocess
+import sys
 
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path("scripts")
 RESULTS_DIR = Path("results")
 python_script = [SCRIPTS_DIR / "cond_open_iql.py"]
+PYTHON = sys.executable
 
 @pytest.fixture(scope="session", autouse=True)
 def check_sumo_installed():
@@ -37,7 +39,7 @@ def test_python_script_execution(script_path):
     
     try:
         result = subprocess.run(
-            ["python", script_filename,
+            [PYTHON, script_filename,
              "--id", id1,
              "--alg-conf", "test",
              "--env-conf", "test",
@@ -55,14 +57,14 @@ def test_python_script_execution(script_path):
         
     try:
         result = subprocess.run(
-            ["python", script_filename,
+            [PYTHON, script_filename,
              "--id", id2,
              "--alg-conf", "test",
              "--env-conf", "test",
              "--task-conf", "dynamic_test",
              "--net", "saint_arnoult",
              "--env-seed", "0",
-             "--torch-seed", "0"
+             "--torch-seed", "0",
              "--no-wandb"],
             capture_output=True, text=True, check=True, cwd=script_path.parent
         )

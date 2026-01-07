@@ -14,35 +14,35 @@
 
 ## Additional folds
 
-- python reproduce/repeat_exp.py --id open_ippo_1 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_ippo_1 --torch-seed 44
+- python tools/reproduce.py --id open_ippo_1 --torch-seed 43
+- python tools/reproduce.py --id open_ippo_1 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_ippo_2 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_ippo_2 --torch-seed 44
+- python tools/reproduce.py --id open_ippo_2 --torch-seed 43
+- python tools/reproduce.py --id open_ippo_2 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_ippo_3 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_ippo_3 --torch-seed 44
+- python tools/reproduce.py --id open_ippo_3 --torch-seed 43
+- python tools/reproduce.py --id open_ippo_3 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_ippo_4 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_ippo_4 --torch-seed 44
+- python tools/reproduce.py --id open_ippo_4 --torch-seed 43
+- python tools/reproduce.py --id open_ippo_4 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_ippo_5 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_ippo_5 --torch-seed 44
+- python tools/reproduce.py --id open_ippo_5 --torch-seed 43
+- python tools/reproduce.py --id open_ippo_5 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_iql_1 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_iql_1 --torch-seed 44
+- python tools/reproduce.py --id open_iql_1 --torch-seed 43
+- python tools/reproduce.py --id open_iql_1 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_iql_2 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_iql_2 --torch-seed 44
+- python tools/reproduce.py --id open_iql_2 --torch-seed 43
+- python tools/reproduce.py --id open_iql_2 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_iql_3 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_iql_3 --torch-seed 44
+- python tools/reproduce.py --id open_iql_3 --torch-seed 43
+- python tools/reproduce.py --id open_iql_3 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_iql_4 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_iql_4 --torch-seed 44
+- python tools/reproduce.py --id open_iql_4 --torch-seed 43
+- python tools/reproduce.py --id open_iql_4 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_iql_5 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_iql_5 --torch-seed 44
+- python tools/reproduce.py --id open_iql_5 --torch-seed 43
+- python tools/reproduce.py --id open_iql_5 --torch-seed 44
 
 
 # Open IPPO vs IQL (env config 2)
@@ -61,32 +61,32 @@
 
 ## Additional folds
 
-- python reproduce/repeat_exp.py --id open_ippo_1_env2 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_ippo_1_env2 --torch-seed 44
+- python tools/reproduce.py --id open_ippo_1_env2 --torch-seed 43
+- python tools/reproduce.py --id open_ippo_1_env2 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_ippo_2_env2 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_ippo_2_env2 --torch-seed 44
+- python tools/reproduce.py --id open_ippo_2_env2 --torch-seed 43
+- python tools/reproduce.py --id open_ippo_2_env2 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_ippo_3_env2 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_ippo_3_env2 --torch-seed 44
+- python tools/reproduce.py --id open_ippo_3_env2 --torch-seed 43
+- python tools/reproduce.py --id open_ippo_3_env2 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_ippo_4_env2 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_ippo_4_env2 --torch-seed 44
+- python tools/reproduce.py --id open_ippo_4_env2 --torch-seed 43
+- python tools/reproduce.py --id open_ippo_4_env2 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_ippo_5_env2 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_ippo_5_env2 --torch-seed 44
+- python tools/reproduce.py --id open_ippo_5_env2 --torch-seed 43
+- python tools/reproduce.py --id open_ippo_5_env2 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_iql_1_env2 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_iql_1_env2 --torch-seed 44
+- python tools/reproduce.py --id open_iql_1_env2 --torch-seed 43
+- python tools/reproduce.py --id open_iql_1_env2 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_iql_2_env2 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_iql_2_env2 --torch-seed 44
+- python tools/reproduce.py --id open_iql_2_env2 --torch-seed 43
+- python tools/reproduce.py --id open_iql_2_env2 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_iql_3_env2 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_iql_3_env2 --torch-seed 44
+- python tools/reproduce.py --id open_iql_3_env2 --torch-seed 43
+- python tools/reproduce.py --id open_iql_3_env2 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_iql_4_env2 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_iql_4_env2 --torch-seed 44
+- python tools/reproduce.py --id open_iql_4_env2 --torch-seed 43
+- python tools/reproduce.py --id open_iql_4_env2 --torch-seed 44
 
-- python reproduce/repeat_exp.py --id open_iql_5_env2 --torch-seed 43
-- python reproduce/repeat_exp.py --id open_iql_5_env2 --torch-seed 44
+- python tools/reproduce.py --id open_iql_5_env2 --torch-seed 43
+- python tools/reproduce.py --id open_iql_5_env2 --torch-seed 44

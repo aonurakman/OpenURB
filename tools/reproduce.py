@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 """
-Utility to rerun recorded experiments defined in results/<exp_id>/exp_config.json.
+Utility to reproduce recorded experiments defined in results/<exp_id>/exp_config.json.
 """
 
 from __future__ import annotations
@@ -128,7 +128,7 @@ def build_command(config: dict, new_id: str, env_seed: int | None, torch_seed: i
 def main() -> None:
     # Wire it all together: parse args, pick the new ID, and fire off the job.
     parser = argparse.ArgumentParser(
-        description="Repeat a recorded experiment using its saved exp_config.json."
+        description="Reproduce a recorded experiment using its saved exp_config.json."
     )
     parser.add_argument("--id", required=True, help="Existing experiment identifier in results/.")
     parser.add_argument("--torch-seed", type=int, help="Override the recorded torch seed.")
@@ -148,7 +148,7 @@ def main() -> None:
 
     command = build_command(config, new_exp_id, env_seed, torch_seed)
 
-    print(f"Repeating experiment '{args.id}' as '{new_exp_id}'.")
+    print(f"Reproducing experiment '{args.id}' as '{new_exp_id}'.")
     print("Executing:", " ".join(command))
 
     result = subprocess.run(command, cwd=str(REPO_ROOT))
