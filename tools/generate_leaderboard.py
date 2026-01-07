@@ -304,6 +304,31 @@ def build_html(payload: Dict, output_path: Path) -> None:
       cursor: pointer;
       user-select: none;
     }
+    .metric-header {
+      cursor: help;
+      text-decoration: underline dotted rgba(53, 76, 140, 0.5);
+      text-underline-offset: 4px;
+    }
+    .metric-tooltip {
+      position: fixed;
+      z-index: 60;
+      max-width: 320px;
+      background: #0f172a;
+      color: #f8fafc;
+      padding: 8px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      line-height: 1.35;
+      box-shadow: 0 14px 30px rgba(15, 23, 42, 0.3);
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity 0.12s ease, transform 0.12s ease;
+      pointer-events: none;
+    }
+    .metric-tooltip.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
     tbody td {
       padding: 9px 10px;
       border-bottom: 1px solid var(--border);
@@ -339,6 +364,15 @@ def build_html(payload: Dict, output_path: Path) -> None:
       margin-bottom: 6px;
       color: var(--muted);
       font-size: 13px;
+    }
+    .hint {
+      color: var(--muted);
+      font-size: 11px;
+      opacity: 0.7;
+    }
+    .hint-footer {
+      text-align: center;
+      margin-top: 18px;
     }
     .download-btn {
       border: 1px solid var(--border);
@@ -390,7 +424,7 @@ def build_html(payload: Dict, output_path: Path) -> None:
     .preview-card {
       position: fixed;
       z-index: 50;
-      width: 360px;
+      width: 540px;
       max-width: 55vw;
       background: #ffffff;
       border: 1px solid var(--border);
@@ -415,7 +449,7 @@ def build_html(payload: Dict, output_path: Path) -> None:
     .preview-img {
       width: 100%;
       height: auto;
-      max-height: 240px;
+      max-height: 360px;
       object-fit: contain;
       border-radius: 10px;
       background: #f8fafc;
@@ -463,7 +497,7 @@ def build_html(payload: Dict, output_path: Path) -> None:
     <header>
       <div>
         <h1 class="title"><a class="title-link" href="https://github.com/COeXISTENCE-PROJECT/OpenURB" target="_blank" rel="noopener">OpenURB</a> Leaderboards</h1>
-        <div class="meta">Grouped by experiment type, environment configuration, task configuration, and traffic network | Generated __GENERATED_AT__</div>
+        <div class="meta">Grouped by experiment type, environment configuration, task configuration, and traffic network</div>
       </div>
       <div class="pill" id="stats-pill">loading...</div>
     </header>
@@ -486,12 +520,14 @@ def build_html(payload: Dict, output_path: Path) -> None:
       <div id="table-container"></div>
     </div>
   </div>
+  <div class="hint hint-footer">Preview hover works best in Google Chrome. | Generated __GENERATED_AT__</div>
 
   <div class="preview-card" id="preview-card">
     <div class="preview-title" id="preview-title">Preview</div>
     <img class="preview-img" id="preview-img" alt="Travel time preview">
     <div class="preview-fallback" id="preview-fallback">Preview not available</div>
   </div>
+  <div class="metric-tooltip" id="metric-tooltip"></div>
 
   <script>
     const leaderboardData = __DATA__;
@@ -506,6 +542,31 @@ def build_html(payload: Dict, output_path: Path) -> None:
     const previewTitle = document.getElementById('preview-title');
     const previewImg = document.getElementById('preview-img');
     const previewFallback = document.getElementById('preview-fallback');
+    const metricTooltip = document.getElementById('metric-tooltip');
+    const isFileProtocol = window.location.protocol === 'file:';
+    const metricDescriptions = {
+      t_pre: 'Avg travel time before mutation (all agents, minutes).',
+      t_test: 'Avg travel time in testing phase (all agents, minutes).',
+      t_train: 'Avg travel time during training phase (all agents, minutes).',
+      t_CAV: 'Avg travel time of CAVs in testing phase (minutes).',
+      t_HDV_pre: 'Avg travel time of humans before mutation (minutes).',
+      t_HDV_test: 'Avg travel time of humans in testing phase (minutes).',
+      CAV_advantage: 'Ratio of human test time to CAV test time (>1 favors CAVs).',
+      Effect_of_change: 'Ratio of human pre-mutation time to CAV test time.',
+      Effect_of_remaining: 'Ratio of human pre-mutation time to human test time.',
+      avg_speed_pre: 'Avg speed before mutation from SUMO (km/h).',
+      avg_speed_test: 'Avg speed in testing phase from SUMO (km/h).',
+      avg_mileage_pre: 'Avg route length before mutation from SUMO (km).',
+      avg_mileage_test: 'Avg route length in testing phase from SUMO (km).',
+      winrate: 'Share of training episodes where CAVs are faster than humans.',
+      cost_of_learning: 'Avg per-agent travel-time spread during training (minutes).',
+      cost_of_learning_humans: 'Human-only learning cost (minutes).',
+      cost_of_learning_CAVs: 'CAV-only learning cost (minutes).',
+      avg_time_lost: 'Avg time lost after mutation across all agents (minutes).',
+      avg_human_time_lost: 'Avg time lost after mutation for humans (minutes).',
+      avg_CAV_time_lost: 'Avg time lost after mutation for CAVs (minutes).',
+      diff_sumo_routerl: 'SUMO avg duration minus RouteRL avg test travel time.',
+    };
 
     const grouped = {};
     const typeCounts = {};
@@ -609,20 +670,62 @@ def build_html(payload: Dict, output_path: Path) -> None:
       return value;
     }
 
-    function previewUrl(exp) {
-      const base = exp.exp_link || exp.exp_path || '';
-      if (!base) return '';
-      return base.replace(/\/$/, '') + '/plots/travel_times.png';
+    let previewCandidates = [];
+    let previewCandidateIndex = 0;
+
+    function previewCandidatesFor(exp) {
+      const candidates = [];
+      const bases = [];
+      if (exp.exp_path) {
+        const relativePath = String(exp.exp_path).replace(/^\/+/, '');
+        if (isFileProtocol) {
+          bases.push(`../${relativePath}`);
+          bases.push(relativePath);
+        } else {
+          bases.push(relativePath);
+          bases.push(`../${relativePath}`);
+        }
+      }
+      if (exp.exp_link) bases.push(exp.exp_link);
+      bases.forEach((base) => {
+        if (!base) return;
+        const normalized = String(base).replace(/\/$/, '');
+        const rawBase = toRawGitHubUrl(normalized);
+        const url = rawBase.replace(/\/$/, '') + '/plots/travel_times.png';
+        if (url && !candidates.includes(url)) {
+          candidates.push(url);
+        }
+      });
+      return candidates;
     }
 
-    function showPreview(expId, url, evt) {
-      if (!url) {
+    function toRawGitHubUrl(url) {
+      if (!/^https?:\/\//i.test(url)) return url;
+      if (url.includes('raw.githubusercontent.com')) return url;
+      if (!url.includes('github.com')) return url;
+      try {
+        const parsed = new URL(url);
+        const parts = parsed.pathname.split('/').filter(Boolean);
+        if (parts.length < 4) return url;
+        const [owner, repo, kind, branch, ...rest] = parts;
+        if (kind !== 'tree' && kind !== 'blob') return url;
+        const rawPath = ['/', owner, repo, branch, ...rest].join('/');
+        return `https://raw.githubusercontent.com${rawPath}`;
+      } catch (err) {
+        return url;
+      }
+    }
+
+    function showPreview(expId, candidates, evt) {
+      previewCandidates = candidates || [];
+      previewCandidateIndex = 0;
+      if (!previewCandidates.length) {
         hidePreview();
         return;
       }
       previewTitle.textContent = `${expId} - plots/travel_times.png`;
       previewCard.classList.remove('missing');
-      previewImg.src = url;
+      previewImg.src = previewCandidates[0];
       previewImg.alt = `Travel times for ${expId}`;
       previewCard.classList.add('visible');
       positionPreview(evt);
@@ -648,8 +751,42 @@ def build_html(payload: Dict, output_path: Path) -> None:
       previewCard.style.top = `${Math.max(padding, top)}px`;
     }
 
+    function showMetricTooltip(text, evt) {
+      metricTooltip.textContent = text;
+      metricTooltip.classList.add('visible');
+      positionMetricTooltip(evt);
+    }
+
+    function hideMetricTooltip() {
+      metricTooltip.classList.remove('visible');
+    }
+
+    function positionMetricTooltip(evt) {
+      const padding = 14;
+      const { innerWidth, innerHeight } = window;
+      const rect = metricTooltip.getBoundingClientRect();
+      let left = evt.clientX + padding;
+      let top = evt.clientY + padding;
+      if (left + rect.width > innerWidth) {
+        left = evt.clientX - rect.width - padding;
+      }
+      if (top + rect.height > innerHeight) {
+        top = evt.clientY - rect.height - padding;
+      }
+      metricTooltip.style.left = `${Math.max(padding, left)}px`;
+      metricTooltip.style.top = `${Math.max(padding, top)}px`;
+    }
+
     previewImg.addEventListener('error', () => {
+      if (previewCandidateIndex + 1 < previewCandidates.length) {
+        previewCandidateIndex += 1;
+        previewImg.src = previewCandidates[previewCandidateIndex];
+        return;
+      }
       previewCard.classList.add('missing');
+    });
+    previewImg.addEventListener('load', () => {
+      previewCard.classList.remove('missing');
     });
 
     function renderTable() {
@@ -696,18 +833,28 @@ def build_html(payload: Dict, output_path: Path) -> None:
 
       const sortState = { column: null, direction: 'desc' };
 
-      function headerCell({ key, label }) {
+      function headerCell({ key, label, description }) {
         const th = document.createElement('th');
         th.textContent = label;
         th.dataset.key = key;
         th.dataset.label = label;
+        if (description) {
+          th.classList.add('metric-header');
+          th.addEventListener('mouseenter', (evt) => showMetricTooltip(description, evt));
+          th.addEventListener('mousemove', positionMetricTooltip);
+          th.addEventListener('mouseleave', hideMetricTooltip);
+        }
         th.onclick = () => applySort(key);
         th.appendChild(document.createElement('span')).className = 'sort-indicator';
         return th;
       }
 
       baseHeaders.forEach((h) => headerRow.appendChild(headerCell(h)));
-      metricCols.forEach((m) => headerRow.appendChild(headerCell({ key: m, label: m })));
+      metricCols.forEach((m) =>
+        headerRow.appendChild(
+          headerCell({ key: m, label: m, description: metricDescriptions[m] })
+        )
+      );
       thead.appendChild(headerRow);
       table.appendChild(thead);
 
@@ -733,8 +880,8 @@ def build_html(payload: Dict, output_path: Path) -> None:
           star.textContent = '*';
           expWrap.appendChild(star);
         }
-        const previewSrc = previewUrl(exp);
-        expWrap.addEventListener('mouseenter', (evt) => showPreview(expId, previewSrc, evt));
+        const previewList = previewCandidatesFor(exp);
+        expWrap.addEventListener('mouseenter', (evt) => showPreview(expId, previewList, evt));
         expWrap.addEventListener('mousemove', positionPreview);
         expWrap.addEventListener('mouseleave', hidePreview);
         expTd.appendChild(expWrap);
