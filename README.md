@@ -123,13 +123,14 @@ Use `--no-wandb` to disable logging while keeping the original disk outputs.
 
 ####  Usage **URB** for baselines
 
-Similarly as for RL algorithms, you have to provide command, but there is one additional flag ```model``` for ```scripts/baselines.py```, instead of ```torch-seed```, then you have command of form:
+Similarly as for RL algorithms, you have to provide command, but there is one additional flag ```model``` for ```scripts/baselines.py```, ```scripts/open_baselines.py```, and ```scripts/cond_open_baselines.py```, instead of ```torch-seed```, then you have command of form:
 
 ```bash
 python scripts/baselines.py --id <exp_id> --alg-conf <hyperparam_id> --env-conf <env_conf_id> --task-conf <task_id> --net <net_name> --env-seed <env_seed> --model <model_name>
 ```
 
 And ```<model_name>``` should be one of ```random```, ```aon``` (included in [baseline_models](baseline_models/)) or ```gawron``` (from [RouteRL](https://github.com/COeXISTENCE-PROJECT/RouteRL/blob/993423d101f39ea67a1f7373e6856af95a0602d4/routerl/human_learning/learning_model.py#L42)). 
+The open baseline scripts mirror the dynamic switching behavior: use task configs with `dynamic` in the name, and `cond_open_baselines.py` conditions switches on group travel times.
 
 For example:
 
