@@ -31,6 +31,7 @@
     "switch_prob_humans": 0.005,
     "switch_prob_machines": 1e-05,
     "script": "/Users/akman/OpenURB/scripts/open_iql.py",
+    "exp_type": "open",
     "network": "saint_arnoult",
     "env_seed": 0,
     "torch_seed": 0,

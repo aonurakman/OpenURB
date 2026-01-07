@@ -5,8 +5,8 @@ Generate a static leaderboard HTML page from experiment outputs under results/.
 The script scans each subdirectory in the provided results directory. If a
 subdirectory contains both an exp_config.json and a metrics/BenchmarkMetrics.csv
 (case-insensitive) file, it is included on the leaderboard. Experiments are
-grouped by env_config, task_config, and network and rendered into tabs with
-sortable tables.
+grouped by exp_type, env_config, task_config, and network and rendered into tabs
+with sortable tables.
 """
 
 import argparse
@@ -69,15 +69,17 @@ def collect_experiments(results_dir: Path) -> List[Dict]:
         if not config or not metrics:
             continue
 
+        script_path = config.get("script") or ""
         experiments.append(
             {
                 "exp_id": exp_dir.name,
                 "exp_path": str(exp_dir.as_posix()),
+                "exp_type": config.get("exp_type", "normal"),
                 "env_config": config.get("env_config"),
                 "task_config": config.get("task_config"),
                 "network": config.get("network"),
                 "algorithm": config.get("algorithm"),
-                "script": config.get("script").split("/")[-1],
+                "script": Path(script_path).name if script_path else "",
                 "alg_config": config.get("alg_config")
                 or config.get("algorithm_config")
                 or config.get("algorithm_configuration")
@@ -302,7 +304,7 @@ def build_html(payload: Dict, output_path: Path) -> None:
     <header>
       <div>
         <h1 class="title">OpenURB Leaderboards</h1>
-        <div class="meta">Grouped by tasks (environment configuration, task configuration, traffic network) | Generated __GENERATED_AT__</div>
+        <div class="meta">Grouped by experiment type, environment configuration, task configuration, and traffic network | Generated __GENERATED_AT__</div>
       </div>
       <div class="pill" id="stats-pill">loading...</div>
     </header>
@@ -319,6 +321,7 @@ def build_html(payload: Dict, output_path: Path) -> None:
         <div>Click a column to sort | Click again to toggle direction</div>
         <div id="combo-count"></div>
       </div>
+      <div class="tabs" id="type-tabs"></div>
       <div class="tabs" id="tabs"></div>
       <div id="table-container"></div>
     </div>
@@ -327,30 +330,90 @@ def build_html(payload: Dict, output_path: Path) -> None:
   <script>
     const leaderboardData = __DATA__;
 
+    const typeTabsEl = document.getElementById('type-tabs');
     const tabsEl = document.getElementById('tabs');
     const tableContainer = document.getElementById('table-container');
     const comboCountEl = document.getElementById('combo-count');
     const statsPill = document.getElementById('stats-pill');
 
     const grouped = {};
+    const typeCounts = {};
+    const typeOrder = ['normal', 'open', 'cond_open'];
+    const typeLabels = {
+      normal: 'Normal',
+      open: 'Open',
+      cond_open: 'Cond Open',
+    };
     for (const exp of leaderboardData.experiments) {
+      const expType = exp.exp_type || 'normal';
       const comboKey = [
         exp.env_config || 'unknown-env',
         exp.task_config || 'unknown-task',
         exp.network || 'unknown-network',
       ].join(' | ');
-      if (!grouped[comboKey]) grouped[comboKey] = [];
-      grouped[comboKey].push(exp);
+      if (!grouped[expType]) grouped[expType] = {};
+      if (!grouped[expType][comboKey]) grouped[expType][comboKey] = [];
+      grouped[expType][comboKey].push(exp);
+      typeCounts[expType] = (typeCounts[expType] || 0) + 1;
     }
 
-    const comboKeys = Object.keys(grouped).sort();
-    comboCountEl.textContent = comboKeys.length ? `${comboKeys.length} problem tabs` : 'No valid experiments found';
+    const typeKeys = Object.keys(grouped).sort((a, b) => {
+      const aIndex = typeOrder.indexOf(a);
+      const bIndex = typeOrder.indexOf(b);
+      if (aIndex === -1 && bIndex === -1) return a.localeCompare(b);
+      if (aIndex === -1) return 1;
+      if (bIndex === -1) return -1;
+      return aIndex - bIndex;
+    });
     statsPill.textContent = `${leaderboardData.experiments.length} experiments indexed`;
 
-    let activeTab = comboKeys[0] || null;
+    let activeType = typeKeys[0] || null;
+    let activeTab = null;
+
+    function comboKeysForType() {
+      if (!activeType || !grouped[activeType]) return [];
+      return Object.keys(grouped[activeType]).sort();
+    }
+
+    function ensureActiveTab() {
+      const comboKeys = comboKeysForType();
+      if (!comboKeys.length) {
+        activeTab = null;
+      } else if (!activeTab || !comboKeys.includes(activeTab)) {
+        activeTab = comboKeys[0];
+      }
+      return comboKeys;
+    }
+
+    function renderTypeTabs() {
+      typeTabsEl.innerHTML = '';
+      if (!typeKeys.length) return;
+      typeKeys.forEach((key) => {
+        const btn = document.createElement('button');
+        btn.className = 'tab' + (key === activeType ? ' active' : '');
+        const label = typeLabels[key] || key;
+        const count = typeCounts[key] || 0;
+        btn.innerHTML = `<strong>${label}</strong><small>${count} experiments</small>`;
+        btn.onclick = () => {
+          activeType = key;
+          activeTab = null;
+          renderTypeTabs();
+          renderTabs();
+          renderTable();
+        };
+        typeTabsEl.appendChild(btn);
+      });
+    }
 
     function renderTabs() {
       tabsEl.innerHTML = '';
+      const comboKeys = ensureActiveTab();
+      if (!comboKeys.length) {
+        comboCountEl.textContent = 'No valid experiments found';
+        return;
+      }
+      const typeLabel = typeLabels[activeType] || activeType;
+      comboCountEl.textContent = `${typeLabel}: ${typeCounts[activeType] || 0} experiments | ${comboKeys.length} problem tabs`;
       comboKeys.forEach((key) => {
         const btn = document.createElement('button');
         btn.className = 'tab' + (key === activeTab ? ' active' : '');
@@ -377,11 +440,11 @@ def build_html(payload: Dict, output_path: Path) -> None:
 
     function renderTable() {
       tableContainer.innerHTML = '';
-      if (!activeTab) {
+      if (!activeType || !activeTab) {
         tableContainer.innerHTML = '<div class="empty">No experiments to display.</div>';
         return;
       }
-      const experiments = grouped[activeTab];
+      const experiments = grouped[activeType]?.[activeTab];
       if (!experiments || !experiments.length) {
         tableContainer.innerHTML = '<div class="empty">No experiments in this group.</div>';
         return;
@@ -498,6 +561,7 @@ def build_html(payload: Dict, output_path: Path) -> None:
       }
     }
 
+    renderTypeTabs();
     renderTabs();
     renderTable();
   </script>

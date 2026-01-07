@@ -113,6 +113,7 @@ if __name__ == "__main__":
     parser.add_argument('--no-wandb', action='store_true', help="Disable Weights & Biases logging.")
     args = parser.parse_args()
     ALGORITHM = "iql"
+    EXP_TYPE = "normal"
     exp_id = args.id
     alg_config = args.alg_conf
     env_config = args.env_conf
@@ -200,6 +201,7 @@ if __name__ == "__main__":
     # Dump exp config to records
     exp_config_path = os.path.join(records_folder, "exp_config.json")
     dump_config = params.copy()
+    dump_config["exp_type"] = EXP_TYPE
     dump_config["network"] = network
     dump_config["env_seed"] = env_seed
     dump_config["torch_seed"] = torch_seed
