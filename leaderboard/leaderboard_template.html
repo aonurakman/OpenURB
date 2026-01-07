@@ -967,8 +967,11 @@
       wrap.appendChild(table);
       tableContainer.appendChild(wrap);
 
-      function applySort(colKey) {
-        if (sortState.column === colKey) {
+      function applySort(colKey, directionOverride) {
+        if (directionOverride) {
+          sortState.column = colKey;
+          sortState.direction = directionOverride;
+        } else if (sortState.column === colKey) {
           sortState.direction = sortState.direction === 'asc' ? 'desc' : 'asc';
         } else {
           sortState.column = colKey;
@@ -976,6 +979,7 @@
         }
 
         const colIndex = [...headerRow.children].findIndex((th) => th.dataset.key === colKey);
+        if (colIndex < 0) return;
         const rows = [...tbody.querySelectorAll('tr')];
         rows.sort((a, b) => {
           const av = a.children[colIndex].dataset.value ?? a.children[colIndex].textContent;
@@ -1000,6 +1004,10 @@
         indicator.textContent = sortState.direction === 'asc'
           ? (strings.sort_indicator_asc || '')
           : (strings.sort_indicator_desc || '');
+      }
+
+      if (metricCols.includes('t_CAV')) {
+        applySort('t_CAV', 'asc');
       }
     }
 
