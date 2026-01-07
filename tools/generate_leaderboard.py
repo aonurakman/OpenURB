@@ -13,6 +13,8 @@ import argparse
 import csv
 import datetime as dt
 import json
+import math
+import re
 import shutil
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
@@ -23,6 +25,8 @@ METRIC_FILENAMES = [
     "metrics/benchmarkMetrics.csv",
     "metrics/benchmarkmetrics.csv",
 ]
+
+VERSIONED_ID_RE = re.compile(r"^(?P<base>.+)_v(?P<version>\d+)$")
 
 
 def read_metrics(exp_dir: Path) -> Optional[Dict[str, str]]:
@@ -54,6 +58,77 @@ def read_config(exp_dir: Path) -> Optional[Dict]:
         return None
     with config_path.open() as f:
         return json.load(f)
+
+
+def split_versioned_id(exp_id: str) -> tuple[str, Optional[int]]:
+    match = VERSIONED_ID_RE.match(exp_id)
+    if not match:
+        return exp_id, None
+    return match.group("base"), int(match.group("version"))
+
+
+def average_metrics(experiments: Sequence[Dict], anchor_metrics: Dict[str, str]) -> Dict[str, object]:
+    metric_keys = set()
+    for exp in experiments:
+        metric_keys.update((exp.get("metrics") or {}).keys())
+
+    averaged: Dict[str, object] = {}
+    for key in metric_keys:
+        values: List[float] = []
+        for exp in experiments:
+            value = (exp.get("metrics") or {}).get(key)
+            if value is None or value == "":
+                continue
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(parsed):
+                continue
+            values.append(parsed)
+        if values:
+            averaged[key] = sum(values) / len(values)
+        elif key in anchor_metrics:
+            averaged[key] = anchor_metrics[key]
+        else:
+            averaged[key] = ""
+    return averaged
+
+
+def collapse_versioned_experiments(experiments: List[Dict]) -> List[Dict]:
+    grouped: Dict[str, List[Dict]] = {}
+    for exp in experiments:
+        base_id, _ = split_versioned_id(exp["exp_id"])
+        grouped.setdefault(base_id, []).append(exp)
+
+    collapsed: List[Dict] = []
+    for base_id, group in grouped.items():
+        versions = [split_versioned_id(exp["exp_id"])[1] for exp in group]
+        has_versions = any(version is not None for version in versions)
+        if not has_versions or len(group) == 1:
+            exp = group[0]
+            exp["fold_count"] = 1
+            collapsed.append(exp)
+            continue
+
+        anchor = next((exp for exp in group if exp["exp_id"] == base_id), None)
+        if anchor is None:
+            anchor = sorted(
+                group,
+                key=lambda item: split_versioned_id(item["exp_id"])[1] or 0,
+            )[0]
+
+        merged = dict(anchor)
+        merged["exp_id"] = base_id
+        merged["metrics"] = average_metrics(group, anchor.get("metrics") or {})
+        merged["metric_order"] = anchor.get("metric_order")
+        merged["fold_count"] = len(group)
+        if merged["fold_count"] > 1:
+            merged["env_seed"] = "varies"
+            merged["torch_seed"] = "varies"
+        collapsed.append(merged)
+
+    return collapsed
 
 
 def collect_experiments(results_dir: Path) -> List[Dict]:
@@ -265,6 +340,26 @@ def build_html(payload: Dict, output_path: Path) -> None:
       color: var(--muted);
       font-size: 13px;
     }
+    .download-btn {
+      border: 1px solid var(--border);
+      background: #ffffff;
+      color: #1f2937;
+      padding: 8px 12px;
+      border-radius: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+    }
+    .download-btn:hover {
+      transform: translateY(-1px);
+      border-color: #c7d2fe;
+      box-shadow: 0 10px 20px rgba(15, 23, 42, 0.12);
+    }
+    .download-btn:active {
+      transform: translateY(0);
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.1);
+    }
     .sort-indicator {
       margin-left: 6px;
       font-size: 11px;
@@ -277,6 +372,70 @@ def build_html(payload: Dict, output_path: Path) -> None:
     }
     a:hover {
       text-decoration: underline;
+    }
+    .title-link {
+      color: inherit;
+    }
+    .fold-star {
+      color: #f59e0b;
+      font-size: 12px;
+      margin-left: 4px;
+      vertical-align: super;
+    }
+    .exp-cell {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .preview-card {
+      position: fixed;
+      z-index: 50;
+      width: 360px;
+      max-width: 55vw;
+      background: #ffffff;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 24px 50px rgba(15, 23, 42, 0.2);
+      padding: 12px;
+      pointer-events: none;
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity 0.12s ease, transform 0.12s ease;
+    }
+    .preview-card.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .preview-title {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+    .preview-img {
+      width: 100%;
+      height: auto;
+      max-height: 240px;
+      object-fit: contain;
+      border-radius: 10px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+    }
+    .preview-fallback {
+      display: none;
+      font-size: 12px;
+      color: var(--muted);
+      padding: 18px;
+      text-align: center;
+      border-radius: 10px;
+      border: 1px dashed #cbd5f5;
+      background: #f8faff;
+    }
+    .preview-card.missing .preview-img {
+      display: none;
+    }
+    .preview-card.missing .preview-fallback {
+      display: block;
     }
     .table-wrap {
       width: 100%;
@@ -303,7 +462,7 @@ def build_html(payload: Dict, output_path: Path) -> None:
   <div class="page">
     <header>
       <div>
-        <h1 class="title">OpenURB Leaderboards</h1>
+        <h1 class="title"><a class="title-link" href="https://github.com/COeXISTENCE-PROJECT/OpenURB" target="_blank" rel="noopener">OpenURB</a> Leaderboards</h1>
         <div class="meta">Grouped by experiment type, environment configuration, task configuration, and traffic network | Generated __GENERATED_AT__</div>
       </div>
       <div class="pill" id="stats-pill">loading...</div>
@@ -319,12 +478,19 @@ def build_html(payload: Dict, output_path: Path) -> None:
     <div class="card">
       <div class="controls">
         <div>Click a column to sort | Click again to toggle direction</div>
+        <button class="download-btn" id="download-csv">Download CSV</button>
         <div id="combo-count"></div>
       </div>
       <div class="tabs" id="type-tabs"></div>
       <div class="tabs" id="tabs"></div>
       <div id="table-container"></div>
     </div>
+  </div>
+
+  <div class="preview-card" id="preview-card">
+    <div class="preview-title" id="preview-title">Preview</div>
+    <img class="preview-img" id="preview-img" alt="Travel time preview">
+    <div class="preview-fallback" id="preview-fallback">Preview not available</div>
   </div>
 
   <script>
@@ -335,6 +501,11 @@ def build_html(payload: Dict, output_path: Path) -> None:
     const tableContainer = document.getElementById('table-container');
     const comboCountEl = document.getElementById('combo-count');
     const statsPill = document.getElementById('stats-pill');
+    const downloadBtn = document.getElementById('download-csv');
+    const previewCard = document.getElementById('preview-card');
+    const previewTitle = document.getElementById('preview-title');
+    const previewImg = document.getElementById('preview-img');
+    const previewFallback = document.getElementById('preview-fallback');
 
     const grouped = {};
     const typeCounts = {};
@@ -438,6 +609,49 @@ def build_html(payload: Dict, output_path: Path) -> None:
       return value;
     }
 
+    function previewUrl(exp) {
+      const base = exp.exp_link || exp.exp_path || '';
+      if (!base) return '';
+      return base.replace(/\/$/, '') + '/plots/travel_times.png';
+    }
+
+    function showPreview(expId, url, evt) {
+      if (!url) {
+        hidePreview();
+        return;
+      }
+      previewTitle.textContent = `${expId} - plots/travel_times.png`;
+      previewCard.classList.remove('missing');
+      previewImg.src = url;
+      previewImg.alt = `Travel times for ${expId}`;
+      previewCard.classList.add('visible');
+      positionPreview(evt);
+    }
+
+    function hidePreview() {
+      previewCard.classList.remove('visible');
+    }
+
+    function positionPreview(evt) {
+      const padding = 16;
+      const { innerWidth, innerHeight } = window;
+      const rect = previewCard.getBoundingClientRect();
+      let left = evt.clientX + padding;
+      let top = evt.clientY + padding;
+      if (left + rect.width > innerWidth) {
+        left = evt.clientX - rect.width - padding;
+      }
+      if (top + rect.height > innerHeight) {
+        top = evt.clientY - rect.height - padding;
+      }
+      previewCard.style.left = `${Math.max(padding, left)}px`;
+      previewCard.style.top = `${Math.max(padding, top)}px`;
+    }
+
+    previewImg.addEventListener('error', () => {
+      previewCard.classList.add('missing');
+    });
+
     function renderTable() {
       tableContainer.innerHTML = '';
       if (!activeType || !activeTab) {
@@ -486,6 +700,7 @@ def build_html(payload: Dict, output_path: Path) -> None:
         const th = document.createElement('th');
         th.textContent = label;
         th.dataset.key = key;
+        th.dataset.label = label;
         th.onclick = () => applySort(key);
         th.appendChild(document.createElement('span')).className = 'sort-indicator';
         return th;
@@ -499,8 +714,32 @@ def build_html(payload: Dict, output_path: Path) -> None:
       const tbody = document.createElement('tbody');
       experiments.forEach((exp) => {
         const tr = document.createElement('tr');
+        const expId = exp.exp_id || 'N/A';
+        const expLink = exp.exp_link || exp.exp_path || '#';
+        const expTd = document.createElement('td');
+        expTd.dataset.value = expId;
+        const expWrap = document.createElement('span');
+        expWrap.className = 'exp-cell';
+        const expAnchor = document.createElement('a');
+        expAnchor.href = expLink;
+        expAnchor.target = '_blank';
+        expAnchor.rel = 'noopener';
+        expAnchor.textContent = expId;
+        expWrap.appendChild(expAnchor);
+        if (exp.fold_count && exp.fold_count > 1) {
+          const star = document.createElement('span');
+          star.className = 'fold-star';
+          star.title = `Averaged over ${exp.fold_count} folds`;
+          star.textContent = '*';
+          expWrap.appendChild(star);
+        }
+        const previewSrc = previewUrl(exp);
+        expWrap.addEventListener('mouseenter', (evt) => showPreview(expId, previewSrc, evt));
+        expWrap.addEventListener('mousemove', positionPreview);
+        expWrap.addEventListener('mouseleave', hidePreview);
+        expTd.appendChild(expWrap);
+        tr.appendChild(expTd);
         const cells = [
-          `<a href="${exp.exp_link || exp.exp_path}" target="_blank" rel="noopener">${exp.exp_id}</a>`,
           exp.algorithm || 'N/A',
           exp.script || 'N/A',
           exp.alg_config || 'N/A',
@@ -564,6 +803,58 @@ def build_html(payload: Dict, output_path: Path) -> None:
     renderTypeTabs();
     renderTabs();
     renderTable();
+
+    function sanitizeSlug(value) {
+      return String(value || 'leaderboard')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    }
+
+    function csvEscape(value) {
+      const text = String(value ?? '');
+      const escaped = text.replace(/"/g, '""');
+      return /[",\n]/.test(escaped) ? `"${escaped}"` : escaped;
+    }
+
+    function cellValue(cell) {
+      if (!cell) return '';
+      const raw = cell.dataset.value ?? cell.textContent ?? '';
+      return String(raw).trim();
+    }
+
+    function downloadCsv() {
+      const table = tableContainer.querySelector('table');
+      if (!table) return;
+
+      const rows = [];
+      const headerCells = [...table.querySelectorAll('thead th')];
+      rows.push(
+        headerCells
+          .map((th) => csvEscape(th.dataset.label || th.textContent || ''))
+          .join(',')
+      );
+
+      const bodyRows = [...table.querySelectorAll('tbody tr')];
+      bodyRows.forEach((row) => {
+        const values = [...row.children].map((cell) => csvEscape(cellValue(cell)));
+        rows.push(values.join(','));
+      });
+
+      const slug = sanitizeSlug(`${activeType || 'leaderboard'}_${activeTab || 'all'}`);
+      const filename = `leaderboard_${slug}.csv`;
+      const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+
+    downloadBtn.addEventListener('click', downloadCsv);
   </script>
 </body>
 </html>
@@ -597,7 +888,7 @@ def main(args: Optional[Sequence[str]] = None) -> None:
     )
     parsed = parser.parse_args(args)
 
-    experiments = collect_experiments(parsed.results_dir)
+    experiments = collapse_versioned_experiments(collect_experiments(parsed.results_dir))
     base_url = parsed.repo_url.rstrip("/") + "/" if parsed.repo_url else ""
     for exp in experiments:
         exp["exp_link"] = base_url + exp["exp_path"]
