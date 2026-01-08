@@ -605,7 +605,8 @@ def extract_metrics(path, config, verbose=False, shifts_path=None):
         vtype_cols = [f"agent_{id}_vType" for id in ids_with_both]
         values = df_slice[value_cols]
         vtypes = df_slice[vtype_cols]
-        mask = vtypes.eq(vtype)
+        rename_map = {f"agent_{id}_vType": f"agent_{id}{value_suffix}" for id in ids_with_both}
+        mask = vtypes.rename(columns=rename_map).eq(vtype)
         return values.where(mask, np.nan).mean(axis=1)
 
     training_tail = tail_episodes(training_frames)
