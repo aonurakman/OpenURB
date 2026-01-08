@@ -1,0 +1,27 @@
+name: Check README sync
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**/[Rr][Ee][Aa][Dd][Mm][Ee]*.md'
+
+jobs:
+  readme-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Build README
+        run: python3 tools/build_readme.py
+
+      - name: Diff README
+        run: |
+          git diff -- README.md
+          git diff --exit-code -- README.md

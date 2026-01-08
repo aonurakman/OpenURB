@@ -1,4 +1,4 @@
-### Results
+## Results
 
 Provided experiment scripts store experiment results in this directory, under the folder name determined by the **experiment identifier**.
 

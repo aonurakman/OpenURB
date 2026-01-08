@@ -1,3 +1,6 @@
+<!--
+This file is generated from docs/README.template.md. Run: python tools/build_readme.py
+-->
 ##### Forked from [URB](https://urbenchmark.com)
 
 <p align="center">
@@ -35,21 +38,21 @@ The task is to develop and evaluate RL methods that enable AV agents to learn ro
 
 ## 📦 Setup
 
-#### Prerequisites 
+#### Prerequisites
 
 Make sure you have SUMO installed in your system. This procedure should be carried out separately, by following the instructions provided [here](https://sumo.dlr.de/docs/Installing/index.html).
 
 #### Cloning repository
 
-Clone the **OpenURB** repository from github by
+Clone the **OpenURB** repository from GitHub by
 
 ```bash
 git clone https://github.com/COeXISTENCE-PROJECT/OpenURB.git
 ```
 
-#### Creating enviroment
+#### Creating environment
 
-- **Option 1** (Recommended): Create a virtual enviroment with `venv`:
+- **Option 1** (Recommended): Create a virtual environment with `venv`:
 
 ```bash
 python -m venv .venv
@@ -61,6 +64,19 @@ and then install dependencies by:
 cd URB
 pip install --force-reinstall --no-cache-dir -r requirements.txt
 ```
+
+## Networks and demand patterns
+
+Urban Routing Benchmark can be executed on a wide set of networks coupled with demand patterns.
+
+We provide:
+- [RouteRL](https://github.com/COeXISTENCE-PROJECT/RouteRL) networks.
+- Some [RESCO](https://github.com/Pi-Star-Lab/RESCO) networks where routing is possible.
+- A set of 25 small cuts from Ile-de-France based on the synthetic agent-based model.
+
+You can run OpenURB on your custom OSM-derived or hand-made SUMO network with a demand pattern
+from a custom source. For compatibility, consult the
+[RouteRL documentation](https://coexistence-project.github.io/RouteRL/).
 
 ## 🔬 Running experiments
 
@@ -74,8 +90,8 @@ python scripts/<script_name>.py --id <exp_id> --alg-conf <hyperparam_id> --env-c
 
 where
 
-- ```<scipt_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, ```cond_open_ippo```, and ```open_qmix```,
-- ```<exp_id>``` is your own experiment identifier, for instance ```random_ing```, 
+- ```<script_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, ```cond_open_ippo```, and ```open_qmix```,
+- ```<exp_id>``` is your own experiment identifier, for instance ```random_ing```,
 - ```<hyperparam_id>``` is the hyperparameterization identifier, it must correspond to a `.json` filename (without extension) in [`config/algo_config`](config/algo_config/). Provided scripts automatically select the algorithm-specific subfolder in this directory.
 - ```<env_conf_id>``` is the environment configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/env_config`](config/env_config/). It is used to parameterize environment-specific processes, such as path generation, disk operations, etc. It is **optional** and by default is set to `config1`.
 - ```<task_id>``` is the task configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/task_config`](config/task_config/). For this repo, use configs with `dynamic` in the name.
@@ -84,7 +100,7 @@ where
 - ```<torch_seed>``` is reproducibility random seed for PyTorch, it is **optional** and by default is set to 42.
 
 For example, the following command runs an experiment using:
-- IQL algorithm, hyperparameterized by `config/algo_config/iql/config1.json`, 
+- IQL algorithm, hyperparameterized by `config/algo_config/iql/config1.json`,
 - The task specified in `config/task_config/dynamic1.json`,
 - The environment parameterization specified in `config/env_config/config1.json` (by default),
 - Experiment identifier `deneme`, which will be used as the folder name in `results/` to save the experiment data,
@@ -101,11 +117,43 @@ Example for QMIX:
 python scripts/open_qmix.py --id deneme_qmix --alg-conf config1 --task-conf dynamic1 --net saint_arnoult --env-seed 42 --torch-seed 0
 ```
 
-> All experiment scripts in this repo expect task configs with `dynamic` in the name. 
+> All experiment scripts in this repo expect task configs with `dynamic` in the name.
 
-#### Optional: Weights & Biases logging
+#### Usage **URB** for baselines
 
-All experiment scripts support optional Weights & Biases logging and will stream per-episode mean rewards and travel times (overall + by agent kind) as episode CSVs are written to disk. Use `--no-wandb` to disable logging if you do not want W&B integration or if `wandb` is not installed.
+Similarly as for RL algorithms, you have to provide command, but there is one additional flag ```model``` for ```scripts/open_baselines.py```, and ```scripts/cond_open_baselines.py```, instead of ```torch-seed```, then you have command of form:
+
+```bash
+python scripts/open_baselines.py --id <exp_id> --alg-conf <hyperparam_id> --env-conf <env_conf_id> --task-conf <task_id> --net <net_name> --env-seed <env_seed> --model <model_name>
+```
+
+For a list of available baseline models, see the **Baseline models** section below.
+The open baseline scripts mirror the dynamic switching behavior: use task configs with `dynamic` in the name, and `cond_open_baselines.py` conditions switches on group travel times.
+
+For example:
+
+```bash
+python scripts/open_baselines.py --id ing_aon --alg-conf config1 --task-conf dynamic2 --net ingolstadt_custom --model aon
+```
+
+## Scripts
+
+We provide training scripts for open vs. conditional switching variants:
+- `open_ippo.py` runs a simplified IPPO/PPO setup with open (predefined) switching.
+- `cond_open_ippo.py` is the IPPO variant with switching conditioned on group travel times.
+- `open_iql.py` runs an IQL setup with open switching.
+- `cond_open_iql.py` is the conditional-switching version of the IQL setup.
+- `open_qmix.py` runs a QMIX setup with open switching.
+
+Baseline scripts are `open_baselines.py` and `cond_open_baselines.py` (see `baseline_models/readme.md`
+for available models). The open variants run dynamic switching (conditional in the `cond_` version)
+and require task configs with `dynamic` in the name.
+
+### Optional: Weights & Biases logging
+
+All experiment scripts support optional Weights & Biases logging and will stream per-episode mean
+rewards and travel times (overall + by agent kind) as episode CSVs are written to disk. Use
+`--no-wandb` to disable logging if you do not want W&B integration or if `wandb` is not installed.
 
 1. Create `wandb_config.json` in the repo root (gitignored) with your W&B settings:
 
@@ -127,36 +175,36 @@ python scripts/open_iql.py --id <exp_id> --alg-conf <hyperparam_id> --task-conf 
 
 Use `--no-wandb` to disable logging while keeping the original disk outputs.
 
-####  Usage **URB** for baselines
+## Baseline models
 
-Similarly as for RL algorithms, you have to provide command, but there is one additional flag ```model``` for ```scripts/open_baselines.py```, and ```scripts/cond_open_baselines.py```, instead of ```torch-seed```, then you have command of form:
+Baseline algorithms can be run with `scripts/open_baselines.py` and `scripts/cond_open_baselines.py`.
+Available model options:
 
-```bash
-python scripts/open_baselines.py --id <exp_id> --alg-conf <hyperparam_id> --env-conf <env_conf_id> --task-conf <task_id> --net <net_name> --env-seed <env_seed> --model <model_name>
-```
+- **Baselines included in OpenURB**
+  - `aon` deterministically picks the shortest free-flow route regardless of congestion.
+  - `random` selects routes uniformly at random.
+- **Additionally available from RouteRL**
+  - `gawron` (base human learning model) follows Gawron (1998) and iteratively shifts cost
+    expectations toward received rewards.
 
-And ```<model_name>``` should be one of ```random```, ```aon``` (included in [baseline_models](baseline_models/)) or ```gawron``` (from [RouteRL](https://github.com/COeXISTENCE-PROJECT/RouteRL/blob/993423d101f39ea67a1f7373e6856af95a0602d4/routerl/human_learning/learning_model.py#L42)). 
-The open baseline scripts mirror the dynamic switching behavior: use task configs with `dynamic` in the name, and `cond_open_baselines.py` conditions switches on group travel times.
+## Results
 
-For example:
+Provided experiment scripts store experiment results in this directory, under the folder name determined by the **experiment identifier**.
 
-```bash
-python scripts/open_baselines.py --id ing_aon --alg-conf config1 --task-conf dynamic2 --net ingolstadt_custom --model aon
-```
+The structure of this result data is demonstrated with some sample results provided in this directory. In summary, this data includes:
+- Experiment configuration values (`exp_config.json`).
+- Demand and route generation data. (XML and CSV files.)
+- Tracked loss values for the used algorithm. (`losses/`)
+- Episode-level data logs. (`episodes/`)
+- Simulation statistics yielded by SUMO. (`SUMO_output/`)
+- Experiment data visualizations from RouteRL. (`plots/`)
+- Calculated URB KPIs, (`metrics/`)
+- Population switch logs (if applicable). (`shifts.csv`)
+- Runtime resource utilization statistics. (`runtime.json`)
 
-## 🔁 Reproducing experiments
+## Tools
 
-Every run saves its configuration under `results/<exp_id>/exp_config.json`. Use `tools/reproduce.py` to replay an experiment with the recorded parameters or with new seeds.
-
-#### Usage
-
-```bash
-python tools/reproduce.py --id <existing_exp_id> [--env-seed <seed>] [--torch-seed <seed>]
-```
-
-The helper stores outputs alongside the original results: plain repeats become `<id>_repeated`, while seed overrides yield `<id>_v2`, `<id>_v3`, and so on.
-
-## 🏷️ Renaming experiments
+Helpers for managing and reproducing experiment results under `results/`.
 
 ### rename.py
 
@@ -170,7 +218,21 @@ python tools/rename.py <old_id> [new_id]
 
 If `new_id` is omitted, a random 5-character alphanumeric id is generated.
 
-## 📊 Calculating metrics and indicators  
+### reproduce.py
+
+Every run saves its configuration under `results/<exp_id>/exp_config.json`. Use this
+script to replay an experiment with the recorded parameters or with new seeds.
+
+Usage:
+
+```bash
+python tools/reproduce.py --id <existing_exp_id> [--env-seed <seed>] [--torch-seed <seed>]
+```
+
+The helper stores outputs alongside the original results: plain repeats become
+`<id>_repeated`, while seed overrides yield `<id>_v2`, `<id>_v3`, and so on.
+
+## 📊 Calculating Metrics and indicators  
 
 Each experiment outputs set of raw records, which are then processed with the script in this folder for a set of performance indicators which we report and several additional metrics that track the quality of the solution and its impact to the system.
 
@@ -182,11 +244,34 @@ To use the analysis script, you have to provide in the command line the followin
 python analysis/metrics.py --id <exp_id> --verbose <verbose> --results-folder <results-folder> --skip-clearing <skip-clearing> --skip-collecting <skip-collecting>
 ```
 
-that will collect the results from the experiment with identifier ```<exp_id>``` and save them in the folder ```<exp_id>/metrics/```. The ```--verbose``` flag is optional and if set to ```True``` will print additional information about the analysis process. Flag ```--results-folder``` is optional and if set to ```True``` will use the folder ```<results-folder>``` instead of the default one ```results/```. The flags ```--skip-clearing``` and ```--skip-collecting``` are optional and if set to ```True``` will skip clearing and collecting the results from the experiment, respectively. Those operations have to be done only once, so if you are running the analysis script multiple times, you can skip them.
-To process every experiment under `results/`, use `python analysis/metrics.py --all` (skips runs that already have metrics unless you add `--no-skip`).
+that will collect the results from the experiment with identifier ```<exp_id>``` and save them in the
+folder ```<exp_id>/metrics/```. The ```--verbose``` flag is optional and if set to ```True``` will
+print additional information about the analysis process. Flag ```--results-folder``` is optional
+and, if set, will use the folder ```<results-folder>``` instead of the default one ```results/```.
+The flags ```--skip-clearing``` and ```--skip-collecting``` are optional and if set to ```True```
+will skip clearing and collecting the results from the experiment, respectively. Those operations
+have to be done only once, so if you are running the analysis script multiple times, you can skip
+them.
+To process every experiment under `results/`, use `python analysis/metrics.py --all` (skips runs that already have metrics unless you add `--no-skip`). For simple parallelism, add `--jobs <n>`. Use `--id` for a single experiment; it cannot be combined with `--all` (and `--jobs` is ignored unless `--all` is set).
+
+Examples:
+
+```bash
+# Single experiment
+python analysis/metrics.py --id open_aon_1 --verbose True
+```
+
+```bash
+# All experiments, skip those with existing metrics
+python analysis/metrics.py --all
+```
+
+```bash
+# All experiments, force recompute, 4 parallel workers
+python analysis/metrics.py --all --no-skip --jobs 4
+```
 
 #### Reported indicators
-
 ---
 
 The core metric is the travel time $t$, which is both the core term of the utility for human drivers (rational utility maximizers) and of the CAVs reward.
@@ -209,3 +294,11 @@ To understand causes of travel time shifts, we track _Average speed_ and _Averag
 We measure the _Cost of training_, expressed as the average of $\sum_{\tau \in train}(t^\tau_a - \hat{t}^{pre}_a)$ over all agents $a$, i.e. the cumulated disturbance CAVs cause during training. We define $c\_{CAV}$ and $c\_{HDV}$ accordingly. We call an experiment _won_ by CAVs if their policy was on average faster than human drivers' behaviour. A final _winrate_ is the share of training episodes where CAVs are faster.
 
 Finally, we report switch statistics from `shifts.csv` (when available): total switches by direction, switches per event/agent, unique switch churn, and machine-ratio summary (start/end/avg/min/max/std).
+
+#### Units of measurement
+---
+
+All the metrics are expressed in the following units:
+- Time: minutes
+- Distance: kilometers
+- Speed: kilometers per hour
