@@ -4,6 +4,7 @@ import sys
 import argparse
 import json
 import xml.etree.ElementTree as ET
+import concurrent.futures as cf
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -962,6 +963,120 @@ def extract_metrics(path, config, verbose=False, shifts_path=None):
     return metrics_df, vector_metrics_df
 
 
+def process_experiment(exp_id, data_path, skip_collecting=False, no_skip=False, verbose=False):
+    metrics_path = os.path.join(data_path, "metrics")
+    plot_path = os.path.join(metrics_path, "plots")
+    combined_csv_path = os.path.join(metrics_path, "combined_data.csv")
+    benchmark_csv_path = os.path.join(metrics_path, "BenchmarkMetrics.csv")
+    vector_csv_path = os.path.join(metrics_path, "VectorMetrics.csv")
+    config_json_path = os.path.join(data_path, "exp_config.json")
+
+    if not no_skip and os.path.exists(benchmark_csv_path) and os.path.exists(vector_csv_path):
+        if verbose:
+            print(f"Skipping {exp_id}: metrics already exist.")
+        return "skipped"
+
+    try:
+        os.makedirs(plot_path, exist_ok=True)
+        if verbose:
+            print(f"Ensured metrics directory structure exists at: {metrics_path}")
+    except OSError as e:
+        return f"Error creating directories: {e}"
+
+    try:
+        with open(config_json_path, "r") as f:
+            exp_config = json.load(f)
+        if verbose:
+            print(f"Loaded configuration from: {config_json_path}")
+    except FileNotFoundError:
+        return f"Error: Configuration file not found at {config_json_path}"
+    except json.JSONDecodeError:
+        return f"Error: Could not decode JSON from {config_json_path}"
+
+    if not skip_collecting:
+        try:
+            collect_to_single_CSV(data_path, combined_csv_path, verbose)
+            if verbose:
+                print(f"Collected data to {combined_csv_path}")
+        except Exception as e:
+            return f"Error during data collection: {e}"
+
+    if not os.path.exists(combined_csv_path):
+        return f"Error: Combined data file not found at {combined_csv_path}. Cannot extract metrics."
+
+    if "training_eps" in exp_config:
+        computed_training_eps = exp_config["training_eps"]
+    elif "n_iters" in exp_config and "agent_frames_per_batch" in exp_config:
+        computed_training_eps = exp_config["n_iters"] * exp_config["agent_frames_per_batch"]
+    else:
+        print("Warning: Could not determine 'training_eps'. Assuming 0.")
+        computed_training_eps = 0
+
+    metric_config = {
+        "human_learning_episodes": exp_config["human_learning_episodes"],
+        "training_eps": computed_training_eps,
+        "dynamic_episodes": exp_config.get("dynamic_episodes", 0),
+        "test_eps": exp_config.get("test_eps", 0), # Use .get for non-critical keys
+    }
+
+    shifts_csv_path = os.path.join(data_path, "shifts.csv")
+    metrics, vector_metrics = extract_metrics(combined_csv_path, metric_config, verbose, shifts_csv_path)
+
+    metrics.to_csv(benchmark_csv_path, index=False)
+    vector_metrics.to_csv(vector_csv_path, index=False)
+
+    if verbose:
+        print(f"Saved metrics to {benchmark_csv_path}")
+        print(f"Saved vector metrics to {vector_csv_path}")
+
+    if vector_metrics.empty:
+        if verbose:
+            print("Vector metrics are empty. Skipping plots.")
+    else:
+        if verbose:
+            print("Generating plots...")
+
+        plot_vector_values(
+            vector_metrics[["episode", "instability_humans", "instability_CAVs"]].copy(),
+            plot_path,
+            "action change count",
+            "Instability",
+        )
+
+        plot_vector_values(
+            vector_metrics[["episode", "avg_time_lost"]].copy(),
+            plot_path,
+            "avg time lost",
+            "Average time lost",
+        )
+
+        plot_vector_values(
+            vector_metrics[["episode", "time_excess"]].copy(),
+            plot_path,
+            "time excess",
+            "Time excess",
+        )
+        if verbose:
+            print("Plots successfully generated.")
+
+    return "success"
+
+
+def find_experiments(root_dir):
+    entries = []
+    if not os.path.isdir(root_dir):
+        return entries
+    for name in sorted(os.listdir(root_dir)):
+        path = os.path.join(root_dir, name)
+        if not os.path.isdir(path):
+            continue
+        config_path = os.path.join(path, "exp_config.json")
+        if not os.path.exists(config_path):
+            continue
+        entries.append((name, path))
+    return entries
+
+
 RESULTS_DEFAULT_DIR = f"./results"
 
 if __name__ == "__main__":
@@ -969,6 +1084,7 @@ if __name__ == "__main__":
     parser.add_argument("--id", type=str, help="Experiment ID to process.")
     parser.add_argument("--all", action="store_true", help="Process all experiments under the results folder.")
     parser.add_argument("--no-skip", action="store_true", help="Recompute metrics even if they already exist.")
+    parser.add_argument("--jobs", type=int, default=1, help="Number of parallel workers when using --all.")
     parser.add_argument("--skip-collecting", type=bool, default=False, help="Skip collecting episodes into the combined CSV.")
     parser.add_argument("--results-folder", type=str, default=RESULTS_DEFAULT_DIR, help="Root folder where experiment results are stored.")
     parser.add_argument("--verbose", type=bool, default=False, help="Enable verbose output.")
@@ -985,117 +1101,14 @@ if __name__ == "__main__":
         print(f"Skip collecting: {skip_collecting}")
         print(f"results folder: {results_folder}")
 
-    def process_experiment(exp_id, data_path):
-        metrics_path = os.path.join(data_path, "metrics")
-        plot_path = os.path.join(metrics_path, "plots")
-        combined_csv_path = os.path.join(metrics_path, "combined_data.csv")
-        benchmark_csv_path = os.path.join(metrics_path, "BenchmarkMetrics.csv")
-        vector_csv_path = os.path.join(metrics_path, "VectorMetrics.csv")
-        config_json_path = os.path.join(data_path, "exp_config.json")
-
-        if not args.no_skip and os.path.exists(benchmark_csv_path) and os.path.exists(vector_csv_path):
-            if verbose:
-                print(f"Skipping {exp_id}: metrics already exist.")
-            return "skipped"
-
-        try:
-            os.makedirs(plot_path, exist_ok=True)
-            if verbose:
-                print(f"Ensured metrics directory structure exists at: {metrics_path}")
-        except OSError as e:
-            return f"Error creating directories: {e}"
-
-        try:
-            with open(config_json_path, "r") as f:
-                exp_config = json.load(f)
-            if verbose:
-                print(f"Loaded configuration from: {config_json_path}")
-        except FileNotFoundError:
-            return f"Error: Configuration file not found at {config_json_path}"
-        except json.JSONDecodeError:
-            return f"Error: Could not decode JSON from {config_json_path}"
-
-        if not skip_collecting:
-            try:
-                collect_to_single_CSV(data_path, combined_csv_path, verbose)
-                if verbose:
-                    print(f"Collected data to {combined_csv_path}")
-            except Exception as e:
-                return f"Error during data collection: {e}"
-
-        if not os.path.exists(combined_csv_path):
-            return f"Error: Combined data file not found at {combined_csv_path}. Cannot extract metrics."
-
-        if "training_eps" in exp_config:
-            computed_training_eps = exp_config["training_eps"]
-        elif "n_iters" in exp_config and "agent_frames_per_batch" in exp_config:
-            computed_training_eps = exp_config["n_iters"] * exp_config["agent_frames_per_batch"]
-        else:
-            print("Warning: Could not determine 'training_eps'. Assuming 0.")
-            computed_training_eps = 0   
-
-        metric_config = {
-            "human_learning_episodes": exp_config["human_learning_episodes"],
-            "training_eps": computed_training_eps,
-            "dynamic_episodes": exp_config.get("dynamic_episodes", 0),
-            "test_eps": exp_config.get("test_eps", 0), # Use .get for non-critical keys
-        }
-
-        shifts_csv_path = os.path.join(data_path, "shifts.csv")
-        metrics, vector_metrics = extract_metrics(combined_csv_path, metric_config, verbose, shifts_csv_path)
-
-        metrics.to_csv(benchmark_csv_path, index=False)
-        vector_metrics.to_csv(vector_csv_path, index=False)
-
-        if verbose:
-            print(f"Saved metrics to {benchmark_csv_path}")
-            print(f"Saved vector metrics to {vector_csv_path}")
-
-        if vector_metrics.empty:
-            if verbose:
-                print("Vector metrics are empty. Skipping plots.")
-        else:
-            if verbose:
-                print("Generating plots...")
-
-            plot_vector_values(
-                vector_metrics[["episode", "instability_humans", "instability_CAVs"]].copy(),
-                plot_path,
-                "action change count",
-                "Instability",
-            )
-
-            plot_vector_values(
-                vector_metrics[["episode", "avg_time_lost"]].copy(),
-                plot_path,
-                "avg time lost",
-                "Average time lost",
-            )
-
-            plot_vector_values(
-                vector_metrics[["episode", "time_excess"]].copy(),
-                plot_path,
-                "time excess",
-                "Time excess",
-            )
-            if verbose:
-                print("Plots successfully generated.")
-
-        return "success"
-
-    def find_experiments(root_dir):
-        entries = []
-        if not os.path.isdir(root_dir):
-            return entries
-        for name in sorted(os.listdir(root_dir)):
-            path = os.path.join(root_dir, name)
-            if not os.path.isdir(path):
-                continue
-            config_path = os.path.join(path, "exp_config.json")
-            if not os.path.exists(config_path):
-                continue
-            entries.append((name, path))
-        return entries
+    if args.all and exp_id:
+        print("Error: Use either --all or --id, not both.")
+        sys.exit(1)
+    if not args.all and not exp_id:
+        print("Error: --id is required unless --all is provided.")
+        sys.exit(1)
+    if not args.all and args.jobs and args.jobs != 1:
+        print("Warning: --jobs is only used with --all. Ignoring.")
 
     if args.all:
         successes = []
@@ -1105,18 +1118,51 @@ if __name__ == "__main__":
         if not experiments:
             print(f"No experiments found under {results_folder}.")
             sys.exit(0)
-        for exp_id, data_path in experiments:
-            if verbose:
-                print(f"Processing {exp_id}...")
-            result = process_experiment(exp_id, data_path)
-            if result == "success":
-                successes.append(exp_id)
-            elif result == "skipped":
-                skipped.append(exp_id)
-            else:
-                failures.append((exp_id, result))
+        job_count = args.jobs if args.jobs and args.jobs > 0 else (os.cpu_count() or 1)
+        job_count = min(job_count, len(experiments))
+        if verbose:
+            print(f"Using {job_count} worker(s) for --all.")
+
+        if job_count <= 1:
+            for exp_id, data_path in experiments:
                 if verbose:
-                    print(f"Failed {exp_id}: {result}")
+                    print(f"Processing {exp_id}...")
+                result = process_experiment(exp_id, data_path, skip_collecting, args.no_skip, verbose)
+                if result == "success":
+                    successes.append(exp_id)
+                elif result == "skipped":
+                    skipped.append(exp_id)
+                else:
+                    failures.append((exp_id, result))
+                    if verbose:
+                        print(f"Failed {exp_id}: {result}")
+        else:
+            with cf.ProcessPoolExecutor(max_workers=job_count) as executor:
+                futures = {
+                    executor.submit(
+                        process_experiment,
+                        exp_id,
+                        data_path,
+                        skip_collecting,
+                        args.no_skip,
+                        verbose,
+                    ): exp_id
+                    for exp_id, data_path in experiments
+                }
+                for future in cf.as_completed(futures):
+                    exp_id = futures[future]
+                    try:
+                        result = future.result()
+                    except Exception as e:
+                        result = f"Error: {e}"
+                    if result == "success":
+                        successes.append(exp_id)
+                    elif result == "skipped":
+                        skipped.append(exp_id)
+                    else:
+                        failures.append((exp_id, result))
+                        if verbose:
+                            print(f"Failed {exp_id}: {result}")
 
         print("Metrics summary:")
         if successes:
@@ -1128,10 +1174,6 @@ if __name__ == "__main__":
             for exp_id, reason in failures:
                 print(f"    {exp_id}: {reason}")
     else:
-        if not exp_id:
-            print("Error: --id is required unless --all is provided.")
-            sys.exit(1)
-
         data_path = ""
         for root, dirs, files in os.walk(results_folder):
             if exp_id in dirs:
@@ -1142,7 +1184,7 @@ if __name__ == "__main__":
             print(f"Experiment ID {exp_id} not found in {results_folder}")
             sys.exit(1)
 
-        result = process_experiment(exp_id, data_path)
+        result = process_experiment(exp_id, data_path, skip_collecting, args.no_skip, verbose)
         if result != "success":
             print(result)
             sys.exit(1)
