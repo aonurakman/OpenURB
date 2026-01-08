@@ -186,6 +186,21 @@ route.rou.xml
 routes.csv
 combined_data.csv
 
+# Keep sample_results fixtures tracked for tests.
+!results/sample_results/
+!results/sample_results/**
+!results/sample_results/detector/
+!results/sample_results/detector/**
+!results/sample_results/episodes/
+!results/sample_results/episodes/**
+!results/sample_results/SUMO_output/
+!results/sample_results/SUMO_output/**
+!results/sample_results/agents.csv
+!results/sample_results/det.add.xml
+!results/sample_results/losses.csv
+!results/sample_results/route.rou.xml
+!results/sample_results/routes.csv
+
 # wandb secrets
 wandb/
 wandb_config.json
