@@ -8,6 +8,17 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <script>
+    window.MathJax = {
+      tex: {
+        inlineMath: [['\\(', '\\)'], ['$', '$']]
+      },
+      options: {
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+      }
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
   <style>
     :root {
       --bg: radial-gradient(circle at 20% 20%, #f5f7ff, #e7ecff 25%, #f8f9ff 60%, #fefefe);
@@ -715,9 +726,12 @@
     }
 
     function showMetricTooltip(text, evt) {
-      metricTooltip.textContent = text;
+      metricTooltip.innerHTML = text;
       metricTooltip.classList.add('visible');
       positionMetricTooltip(evt);
+      if (window.MathJax && window.MathJax.typesetPromise) {
+        MathJax.typesetPromise([metricTooltip]);
+      }
     }
 
     function hideMetricTooltip() {
