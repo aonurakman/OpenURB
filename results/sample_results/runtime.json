@@ -1,0 +1,22 @@
+{
+    "experiment": {
+        "id": "sample_results",
+        "script": "open_iql.py",
+        "alg_config": "test",
+        "task_config": "dynamic_test",
+        "env_config": "test"
+    },
+    "timing": {
+        "start_local": "2026-01-08 13:40:57 CET",
+        "end_local": "2026-01-08 13:42:21 CET",
+        "duration": "00:01:23.509"
+    },
+    "resources": {
+        "cpu_user_sec": 28.229,
+        "cpu_system_sec": 7.821,
+        "voluntary_context_switches": 1523388,
+        "involuntary_context_switches": 34140,
+        "peak_memory_mb": 451.281,
+        "records_folder_size_mb": 4.276
+    }
+}

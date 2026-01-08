@@ -4,9 +4,27 @@ on:
   push:
     branches:
       - '**'
+    paths:
+      - "algorithms/**"
+      - "baseline_models/**"
+      - "config/**"
+      - "networks/**"
+      - "scripts/**"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/test_scripts.yml"
   pull_request:
     branches:
       - '**'
+    paths:
+      - "algorithms/**"
+      - "baseline_models/**"
+      - "config/**"
+      - "networks/**"
+      - "scripts/**"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/test_scripts.yml"
   workflow_dispatch:
 
 jobs:

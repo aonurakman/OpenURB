@@ -4,9 +4,21 @@ on:
   push:
     branches:
       - '**'
+    paths:
+      - "algorithms/**"
+      - "analysis/**"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/unit_tests.yml"
   pull_request:
     branches:
       - '**'
+    paths:
+      - "algorithms/**"
+      - "analysis/**"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/unit_tests.yml"
   workflow_dispatch:
 
 jobs:

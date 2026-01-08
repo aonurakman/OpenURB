@@ -4,9 +4,25 @@ on:
   push:
     branches:
       - '**'
+    paths:
+      - "algorithms/**"
+      - "config/**"
+      - "networks/**"
+      - "scripts/**"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/test_reproducibility.yml"
   pull_request:
     branches:
       - '**'
+    paths:
+      - "algorithms/**"
+      - "config/**"
+      - "networks/**"
+      - "scripts/**"
+      - "tests/**"
+      - "requirements.txt"
+      - ".github/workflows/test_reproducibility.yml"
   workflow_dispatch:
 
 jobs:
