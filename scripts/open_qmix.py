@@ -53,22 +53,52 @@ def extract_action_mask(observation, info, action_space_size):
 
     if action_mask is not None:
         # Force mask into a flat {0,1} array aligned to action_space_size.
+        # Note: action masks apply to *actions of the currently-selected agent* (AEC),
+        # not to "which agents are allowed to act".
         action_mask = np.asarray(action_mask, dtype=np.int8).reshape(-1)
-        if action_mask.shape[0] != action_space_size:
+        if action_mask.shape[0] < action_space_size:
+            padded = np.zeros(action_space_size, dtype=np.int8)
+            padded[: action_mask.shape[0]] = action_mask
+            action_mask = padded
+        elif action_mask.shape[0] > action_space_size:
             action_mask = action_mask[:action_space_size]
 
     obs = np.asarray(obs, dtype=np.float32)
     return obs, action_mask
 
 
-def build_global_state(obs_by_agent, agent_ids, obs_size, active_mask):
-    """Build the global state vector by concatenating per-agent observations."""
-    state = np.zeros((len(agent_ids), obs_size), dtype=np.float32)
+def build_static_agent_features(all_agents, freeflows, agent_ids, obs_size):
+    """Build per-agent *static* features used as the QMIX mixing state.
+
+    Why static?
+    - QMIX's monotonicity guarantee assumes the mixing weights depend only on *state*,
+      not on the chosen actions.
+    - In this environment, per-agent observations evolve over the day (as earlier
+      departures inform later departures), so concatenating decision-time observations
+      into the mixer state would make the "state" implicitly action-dependent.
+
+    We therefore use a per-agent, action-independent snapshot:
+      [free-flow times for each path option] + [origin, destination, start_time]
+    """
+    static_obs = np.zeros((len(agent_ids), obs_size), dtype=np.float32)
+    agent_by_id = {str(agent.id): agent for agent in all_agents}
     for idx, agent_id in enumerate(agent_ids):
-        # Only active agents contribute non-zero observations.
-        if active_mask[idx] > 0 and agent_id in obs_by_agent:
-            state[idx] = obs_by_agent[agent_id]
-    return state.reshape(-1)
+        agent = agent_by_id.get(agent_id)
+        if agent is None:
+            continue
+        # Matches routerl.environment.observations.TripInfoWithETA.reset_observation().
+        ff_key = (int(agent.origin), int(agent.destination))
+        ff = np.asarray(freeflows[ff_key], dtype=np.float32).reshape(-1)
+        ff_target = max(0, obs_size - 3)
+        if ff.shape[0] < ff_target:
+            padded = np.zeros(ff_target, dtype=np.float32)
+            padded[: ff.shape[0]] = ff
+            ff = padded
+        elif ff.shape[0] > ff_target:
+            ff = ff[:ff_target]
+        extras = np.asarray([int(agent.origin), int(agent.destination), int(agent.start_time)], dtype=np.float32)
+        static_obs[idx] = np.concatenate([ff, extras]).astype(np.float32, copy=False)
+    return static_obs
 
 
 # Main script to run the QMIX experiment
@@ -283,10 +313,16 @@ if __name__ == "__main__":
     # Fix an ordering over the full population to define the global state shape.
     agent_id_list = sorted(str(agent.id) for agent in env.all_agents)
     agent_id_to_index = {agent_id: idx for idx, agent_id in enumerate(agent_id_list)}
-    global_state_size = obs_size * len(agent_id_list)
+    # Mixer state includes static features + a per-agent "is AV today" flag.
+    global_state_size = (obs_size + 1) * len(agent_id_list)
+
+    # Precompute static, action-independent per-agent features for the mixer.
+    freeflows = env.get_free_flow_times()
+    static_obs_matrix = build_static_agent_features(env.all_agents, freeflows, agent_id_list, obs_size)
 
     ######## Set policy for machine agents ########
-    # Shared QMIX learner for all AVs; centralized mixing uses the full population.
+    # QMIX learner shared by all AVs; the mixer assumes a fixed "max population"
+    # (the full population size). Agents who are currently humans are masked out.
     qmix = QMIX(
         obs_size,
         action_space_size,
@@ -307,7 +343,6 @@ if __name__ == "__main__":
         max_grad_norm=max_grad_norm,
         share_parameters=share_parameters,
     )
-    agent_lookup = {str(agent.id): agent for agent in env.machine_agents}
     for agent in env.machine_agents:
         # Parameter sharing: each AV points to the same learner.
         agent.model = qmix
@@ -318,56 +353,61 @@ if __name__ == "__main__":
     ###############################################
     ######## AV learning + Switching phase ########
     ###############################################
-    # Each episode is a single-step joint decision for current machine agents.
+    # Training data model:
+    # - Environment interaction stays identical to IL scripts: AEC turn-taking,
+    #   one action per AV per day via `env.agent_iter()`.
+    # - Learning treats the entire day as one *joint* decision problem over the AV group:
+    #     (obs_i, action_i) for each AV i  ->  team_reward at end of day.
+    #
+    # This is why we store one joint transition per day into QMIX's replay buffer.
     pbar.set_description("AV learning")
     for episode in range(training_eps + dynamic_episodes):
         env.reset()
-        # Per-episode storage for QMIX (single-step joint transition).
-        episode_obs = dict()
-        episode_actions = dict()
-        episode_rewards = dict()
-
-        # Active mask marks which agents are AVs this episode.
+        # Active mask: which agents are AVs *today* (not "whose turn it is").
         active_mask = np.zeros(len(agent_id_list), dtype=np.float32)
         for agent_id in env.possible_agents:
             active_mask[agent_id_to_index[agent_id]] = 1.0
+
+        # Mixer state is a static snapshot plus the current AV composition.
+        # We append the active flag as the last feature per agent.
+        mixer_state = (
+            np.concatenate([static_obs_matrix, active_mask.reshape(-1, 1)], axis=1)
+            .astype(np.float32, copy=False)
+            .reshape(-1)
+        )
+
+        # Joint buffers (fixed-size over the full population).
+        obs_batch = np.zeros((len(agent_id_list), obs_size), dtype=np.float32)
+        actions_batch = np.zeros(len(agent_id_list), dtype=np.int64)
+        rewards_batch = np.zeros(len(agent_id_list), dtype=np.float32)
 
         for agent_id in env.agent_iter():
             observation, reward, termination, truncation, info = env.last()
             obs, action_mask = extract_action_mask(observation, info, action_space_size)
 
             if termination or truncation:
-                # AEC: reward arrives at termination; store it for this agent.
-                if agent_id in episode_actions:
-                    episode_rewards[agent_id] = reward
+                # AEC: rewards are assigned when the day finishes. During the terminal
+                # "dead steps", PettingZoo yields each agent again so we can read its reward.
+                idx = agent_id_to_index[agent_id]
+                rewards_batch[idx] = float(reward)
                 action = None
             else:
-                # Choose an action with masking for invalid routes.
+                # Choose an action for the current agent only (AEC semantics).
                 action = qmix.act(
                     obs,
                     action_mask=action_mask,
                     agent_index=agent_id_to_index[agent_id],
                 )
-                episode_obs[agent_id] = obs
-                episode_actions[agent_id] = action
+                idx = agent_id_to_index[agent_id]
+                obs_batch[idx] = obs
+                actions_batch[idx] = int(action)
 
             env.step(action)
 
-        # Pack joint observations/actions/rewards into fixed-size arrays.
-        obs_batch = np.zeros((len(agent_id_list), obs_size), dtype=np.float32)
-        actions_batch = np.zeros(len(agent_id_list), dtype=np.int64)
-        rewards_batch = np.zeros(len(agent_id_list), dtype=np.float32)
-        for agent_id, action in episode_actions.items():
-            idx = agent_id_to_index[agent_id]
-            obs_batch[idx] = episode_obs[agent_id]
-            actions_batch[idx] = action
-            rewards_batch[idx] = episode_rewards.get(agent_id, 0.0)
-
-        # Global state concatenates per-agent obs; inactive agents remain zero.
-        global_state = build_global_state(episode_obs, agent_id_list, obs_size, active_mask)
-        qmix.store_episode(obs_batch, actions_batch, rewards_batch, active_mask, global_state)
+        # Store one joint transition for the day.
+        qmix.store_episode(obs_batch, actions_batch, rewards_batch, active_mask, mixer_state)
         if episode % update_every == 0:
-            # Single-step learning update (no bootstrapping).
+            # Single-step QMIX update (Monte Carlo target: team reward).
             qmix.learn()
            
         ################################## 
@@ -394,7 +434,7 @@ if __name__ == "__main__":
             
             known_machines = set(machine_agents_copy.keys())
             
-            for human in env.human_agents:
+            for human in env.human_agents[:]:
                 if random.random() <= switch_prob_humans:
                     # Convert a human to an AV (reuse prior AV state if available).
                     env.human_agents.remove(human)
@@ -411,10 +451,9 @@ if __name__ == "__main__":
                         new_av.model = qmix
                     
                     env.machine_agents.append(new_av)
-                    agent_lookup[str(new_av.id)] = new_av
                     shifted_humans.append(str(human.id))
                       
-            for machine in env.machine_agents:
+            for machine in env.machine_agents[:]:
                 if (str(machine.id) not in shifted_humans) and (random.random() <= switch_prob_machines):
                     # Convert an AV back to a human and remove from the AV pool.
                     env.machine_agents.remove(machine)
@@ -423,7 +462,6 @@ if __name__ == "__main__":
                     new_human = copy.deepcopy(human_agents_copy[str(machine.id)])
                     env.human_agents.append(new_human)
                     
-                    del agent_lookup[str(machine.id)]
                     shifted_avs.append(str(machine.id))
              
             # Rebuild internal env bookkeeping after group changes.

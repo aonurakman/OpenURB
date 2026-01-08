@@ -1,8 +1,15 @@
 """
-Simplified QMIX implementation for single-step episodes with optional parameter sharing.
+Simplified QMIX implementation for *single-step* episodes with optional parameter sharing.
 
 The agent networks produce per-agent Q-values, while the mixing network combines
 active agent values into a global Q_total conditioned on the global state.
+
+This implementation intentionally targets the "one joint transition per episode" use case:
+- Each stored sample contains a full joint action (one action per active agent).
+- The learning target is a Monte Carlo team return for that joint action (no bootstrapping).
+
+If you need temporal credit assignment across multiple environment steps, you'll want a
+sequence-based QMIX variant (RNN agent nets + TD targets).
 """
 
 from collections import deque
@@ -88,7 +95,20 @@ class MixingNetwork(nn.Module):
 
 
 class QMIX(BaseLearningModel):
-    """Single-step QMIX learner with optional parameter sharing and centralized mixing."""
+    """Single-step QMIX learner with optional parameter sharing and centralized mixing.
+
+    Key ideas:
+    - Each agent has a local Q-network Q_i(o_i, a_i).
+    - A monotonic mixing network produces a joint action-value:
+        Q_tot(s, u) = MIX_s(Q_1, ..., Q_n)
+      where MIX_s enforces dQ_tot/dQ_i >= 0 via positive mixing weights.
+    - With monotonicity, the greedy joint action can be obtained by greedy per-agent actions.
+
+    Notes for this repo:
+    - We store exactly one joint transition per episode and fit Q_tot to the observed team return.
+    - `active_mask` is used to zero-out inactive agents (e.g., humans) so the fixed-size mixer can
+      handle dynamic populations.
+    """
     def __init__(
         self,
         state_size: int,
@@ -173,7 +193,8 @@ class QMIX(BaseLearningModel):
         action_mask: Optional[np.ndarray] = None,
         agent_index: Optional[int] = None,
     ) -> int:
-        # Epsilon-greedy policy over agent Q-values, with masking if available.
+        # Epsilon-greedy policy over the current agent's Q-values.
+        # If an action mask is provided, invalid actions are excluded from sampling and argmax.
         if np.random.rand() < self.epsilon:
             return self._random_action(action_mask)
 
@@ -199,7 +220,14 @@ class QMIX(BaseLearningModel):
         active_mask: np.ndarray,
         global_state: np.ndarray,
     ) -> None:
-        # Store single-step joint transition for centralized training.
+        # Store one joint transition (one step) for centralized training.
+        #
+        # Shapes:
+        # - observations:  [num_agents, obs_dim]
+        # - actions:       [num_agents]
+        # - rewards:       [num_agents] (per-agent rewards from the environment)
+        # - active_mask:   [num_agents] (1 for active agents this episode; else 0)
+        # - global_state:  [state_dim]  (state vector used by the mixing hypernetworks)
         self.memory.append(
             {
                 "obs": np.asarray(observations, dtype=np.float32),
@@ -212,13 +240,23 @@ class QMIX(BaseLearningModel):
 
     def learn(self) -> None:
         # Learn from a batch of single-step joint transitions.
+        #
+        # Target:
+        # - This learner uses a Monte Carlo target for the joint action:
+        #     y = team_return
+        #   so there is no TD bootstrap or target network in this simplified variant.
         if len(self.memory) < self.batch_size:
             return
 
         step_loss = []
         for _ in range(self.num_epochs):
             batch = random.sample(self.memory, self.batch_size)
-            # Stack joint data into tensors: [batch, num_agents, ...]
+            # Stack joint data into tensors:
+            # - obs:         [B, N, obs_dim]
+            # - actions:     [B, N]
+            # - rewards:     [B, N]
+            # - active_mask: [B, N]
+            # - states:      [B, state_dim]
             obs = torch.tensor(np.stack([item["obs"] for item in batch]), device=self.device)
             actions = torch.tensor(np.stack([item["actions"] for item in batch]), device=self.device)
             rewards = torch.tensor(np.stack([item["rewards"] for item in batch]), device=self.device)
@@ -241,19 +279,24 @@ class QMIX(BaseLearningModel):
                     dim=1,
                 )
 
-            # Ignore actions for inactive agents to avoid invalid indexing.
+            # Ignore actions for inactive agents to avoid invalid indexing in gather().
             safe_actions = actions.clone()
             safe_actions[active_mask == 0] = 0
             chosen_q = torch.gather(q_values, 2, safe_actions.unsqueeze(-1)).squeeze(-1)
             # Zero-out inactive agent contributions in the joint value.
             chosen_q = chosen_q * active_mask
 
-            # Mix active agent Q-values into a global joint Q_total.
+            # Mix active agent Q-values into a global joint action-value Q_tot(s, u).
             q_tot = self.mixing_net(chosen_q, states)
-            # Team reward is the sum of rewards for active agents.
-            team_rewards = (rewards * active_mask).sum(dim=1)
+            # Team return:
+            # - Use the mean reward across active agents to keep target scale stable when the
+            #   number of active agents changes (dynamic populations).
+            # - This differs from the sum only by a per-episode scalar factor when the number
+            #   of active agents is fixed.
+            active_counts = active_mask.sum(dim=1).clamp(min=1.0)
+            team_rewards = (rewards * active_mask).sum(dim=1) / active_counts
 
-            # Single-step target: no bootstrapping in this environment.
+            # Single-step Monte Carlo target: no bootstrapping.
             loss = F.mse_loss(q_tot, team_rewards)
             self.optimizer.zero_grad()
             loss.backward()

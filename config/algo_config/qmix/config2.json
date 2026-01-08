@@ -1,18 +1,18 @@
 {
     "training_eps" : 1000,
-    "share_parameters" : false,
+    "share_parameters" : true,
 
-    "eps_init" : 0.95,
-    "eps_decay" : 0.995,
+    "eps_init" : 1.0,
+    "eps_decay" : 0.9995,
     "eps_min" : 0.05,
-    "buffer_size" : 1024,
-    "batch_size" : 32,
-    "lr" : 0.0003,
-    "num_epochs" : 2,
+    "buffer_size" : 4096,
+    "batch_size" : 64,
+    "lr" : 0.00015,
+    "num_epochs" : 1,
     "num_hidden" : 2,
-    "widths" : [64, 128, 64],
-    "mixing_embed_dim" : 64,
-    "hypernet_embed" : 128,
+    "widths" : [128, 128, 128],
+    "mixing_embed_dim" : 32,
+    "hypernet_embed" : 64,
     "max_grad_norm" : 10.0,
     "update_every" : 1
 }
