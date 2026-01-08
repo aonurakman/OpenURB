@@ -99,7 +99,7 @@ if __name__ == "__main__":
     params.update(alg_params)
     params.update(env_params)
     params.update(task_params)
-    del env_params, task_params
+    del params["desc"], env_params, task_params
 
     # set params as variables in this script
     for key, value in params.items():

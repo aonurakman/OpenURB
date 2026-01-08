@@ -134,7 +134,7 @@ if __name__ == "__main__":
     params.update(env_params)
     params.update(task_params)
     params.setdefault("share_parameters", True)
-    del env_params, task_params
+    del params["desc"], env_params, task_params
 
     # Expose config values as local variables for consistency with other scripts.
     for key, value in params.items():
