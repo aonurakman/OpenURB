@@ -219,7 +219,14 @@ def load_routeRL(file) -> pd.DataFrame:
     return flatten_by_id(df)
 
 
-def load_episode(results_path: str, episode: int, verbose: bool) -> pd.DataFrame:
+def _verbose_print(message: str, use_tqdm: bool) -> None:
+    if use_tqdm:
+        tqdm.write(message)
+    else:
+        print(message)
+
+
+def load_episode(results_path: str, episode: int, verbose: bool, use_tqdm: bool = False) -> pd.DataFrame:
     """
     Load, merge, and return all data for a single episode as a single-row DataFrame.
 
@@ -254,7 +261,7 @@ def load_episode(results_path: str, episode: int, verbose: bool) -> pd.DataFrame
 
     if not detailed_sumo_file or not general_sumo_file or not routerl_file:
         if verbose:
-            print(f"Skipping episode {episode} due to missing data files.")
+            _verbose_print(f"Skipping episode {episode} due to missing data files.", use_tqdm)
         return pd.DataFrame()
 
     df_detailed = load_detailed_SUMO(detailed_sumo_file)
@@ -263,13 +270,13 @@ def load_episode(results_path: str, episode: int, verbose: bool) -> pd.DataFrame
 
     if df_detailed.empty or df_general.empty or df_route_rl.empty:
         if verbose:
-            print(f"Skipping episode {episode} due to empty data file.")
+            _verbose_print(f"Skipping episode {episode} due to empty data file.", use_tqdm)
         return pd.DataFrame()
 
     merged_df = pd.concat([df_detailed, df_general, df_route_rl], axis=1)
     merged_df.insert(0, "episode", episode)
     if verbose:
-        print(f"Loaded episode {episode} with shape {merged_df.shape}")
+        _verbose_print(f"Loaded episode {episode} with shape {merged_df.shape}", use_tqdm)
     return merged_df
 
 def collect_to_single_CSV(
@@ -297,7 +304,7 @@ def collect_to_single_CSV(
 
     # ----- Each episode is loaded and merged into a single row DataFrame -----
     for i in tqdm(episodes) if verbose else episodes:
-        episode_df = load_episode(path, i, verbose)
+        episode_df = load_episode(path, i, verbose, use_tqdm=verbose)
         if not episode_df.empty:
            dfs.append(episode_df)
 
