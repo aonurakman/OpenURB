@@ -4,6 +4,7 @@ All configs in this folder share the same keys and are consumed by `scripts/open
 and `algorithms/simple_qmix.py`.
 
 - `training_eps`: number of training episodes in the AV learning phase.
+- `share_parameters`: whether to share a single agent Q-network across all agents.
 - `eps_init`: initial epsilon for epsilon-greedy action selection.
 - `eps_decay`: multiplicative epsilon decay applied after each learning step.
 - `eps_min`: lower bound for epsilon during decay.

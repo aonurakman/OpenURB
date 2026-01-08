@@ -1,7 +1,7 @@
 """
-Simplified QMIX implementation for single-step episodes with parameter sharing.
+Simplified QMIX implementation for single-step episodes with optional parameter sharing.
 
-The agent network produces per-agent Q-values, while the mixing network combines
+The agent networks produce per-agent Q-values, while the mixing network combines
 active agent values into a global Q_total conditioned on the global state.
 """
 
@@ -21,7 +21,7 @@ __all__ = ["AgentNetwork", "MixingNetwork", "QMIX"]
 
 
 class AgentNetwork(nn.Module):
-    """Shared agent-level Q-network used by all machine agents."""
+    """Agent-level Q-network used by machine agents."""
     def __init__(self, in_size: int, out_size: int, num_hidden: int, widths: Sequence[int]):
         super().__init__()
         assert len(widths) == (num_hidden + 1), "QMIX widths and number of layers mismatch!"
@@ -88,7 +88,7 @@ class MixingNetwork(nn.Module):
 
 
 class QMIX(BaseLearningModel):
-    """Single-step QMIX learner with shared agent network and centralized mixing."""
+    """Single-step QMIX learner with optional parameter sharing and centralized mixing."""
     def __init__(
         self,
         state_size: int,
@@ -108,12 +108,14 @@ class QMIX(BaseLearningModel):
         mixing_embed_dim: int = 32,
         hypernet_embed: int = 64,
         max_grad_norm: float = 10.0,
+        share_parameters: bool = False,
     ):
         super().__init__()
         self.device = device
         self.action_space_size = action_space_size
         self.num_agents = num_agents
         self.global_state_size = global_state_size
+        self.share_parameters = share_parameters
         self.epsilon = eps_init
         self.eps_decay = eps_decay
         self.eps_min = eps_min
@@ -121,16 +123,40 @@ class QMIX(BaseLearningModel):
         self.num_epochs = num_epochs
         self.max_grad_norm = max_grad_norm
 
-        # Shared per-agent Q-network and centralized mixing network.
-        self.agent_net = AgentNetwork(state_size, action_space_size, num_hidden, widths).to(self.device)
+        # Per-agent Q-network(s) and centralized mixing network.
+        if self.share_parameters:
+            self.agent_net = AgentNetwork(state_size, action_space_size, num_hidden, widths).to(self.device)
+            self.agent_nets = None
+        else:
+            self.agent_net = None
+            self.agent_nets = nn.ModuleList(
+                [
+                    AgentNetwork(state_size, action_space_size, num_hidden, widths).to(self.device)
+                    for _ in range(num_agents)
+                ]
+            )
         self.mixing_net = MixingNetwork(num_agents, global_state_size, mixing_embed_dim, hypernet_embed).to(self.device)
 
         self.optimizer = optim.Adam(
-            list(self.agent_net.parameters()) + list(self.mixing_net.parameters()),
+            list(self._agent_parameters()) + list(self.mixing_net.parameters()),
             lr=lr,
         )
         self.loss = []
         self.memory = deque(maxlen=buffer_size)
+
+    def _agent_parameters(self):
+        if self.share_parameters:
+            return self.agent_net.parameters()
+        return self.agent_nets.parameters()
+
+    def _select_agent_net(self, agent_index: Optional[int]) -> AgentNetwork:
+        if self.share_parameters:
+            return self.agent_net
+        if agent_index is None:
+            raise ValueError("agent_index must be provided when share_parameters is False.")
+        if agent_index < 0 or agent_index >= self.num_agents:
+            raise ValueError(f"agent_index {agent_index} is out of range for {self.num_agents} agents.")
+        return self.agent_nets[agent_index]
 
     def _random_action(self, action_mask: Optional[np.ndarray]) -> int:
         # Uniform sampling with optional action masking support.
@@ -141,14 +167,19 @@ class QMIX(BaseLearningModel):
             return int(np.random.randint(self.action_space_size))
         return int(np.random.choice(valid_actions))
 
-    def act(self, state: np.ndarray, action_mask: Optional[np.ndarray] = None) -> int:
+    def act(
+        self,
+        state: np.ndarray,
+        action_mask: Optional[np.ndarray] = None,
+        agent_index: Optional[int] = None,
+    ) -> int:
         # Epsilon-greedy policy over agent Q-values, with masking if available.
         if np.random.rand() < self.epsilon:
             return self._random_action(action_mask)
 
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         with torch.no_grad():
-            q_values = self.agent_net(state_tensor).squeeze(0)
+            q_values = self._select_agent_net(agent_index)(state_tensor).squeeze(0)
 
         if action_mask is not None:
             # Mask invalid actions by assigning a large negative value.
@@ -195,10 +226,20 @@ class QMIX(BaseLearningModel):
             states = torch.tensor(np.stack([item["state"] for item in batch]), device=self.device)
 
             batch_size, num_agents, obs_dim = obs.shape
-            # Compute per-agent Q-values with the shared agent network.
-            q_values = self.agent_net(obs.view(-1, obs_dim)).view(
-                batch_size, num_agents, self.action_space_size
-            )
+            # Compute per-agent Q-values with shared or per-agent networks.
+            if self.share_parameters:
+                q_values = self.agent_net(obs.view(-1, obs_dim)).view(
+                    batch_size, num_agents, self.action_space_size
+                )
+            else:
+                if num_agents != self.num_agents:
+                    raise ValueError(
+                        f"Observed {num_agents} agents, expected {self.num_agents} for QMIX."
+                    )
+                q_values = torch.stack(
+                    [self.agent_nets[idx](obs[:, idx, :]) for idx in range(num_agents)],
+                    dim=1,
+                )
 
             # Ignore actions for inactive agents to avoid invalid indexing.
             safe_actions = actions.clone()
@@ -217,7 +258,7 @@ class QMIX(BaseLearningModel):
             self.optimizer.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(
-                list(self.agent_net.parameters()) + list(self.mixing_net.parameters()),
+                list(self._agent_parameters()) + list(self.mixing_net.parameters()),
                 max_norm=self.max_grad_norm,
             )
             self.optimizer.step()
@@ -230,9 +271,15 @@ class QMIX(BaseLearningModel):
         self.epsilon = max(self.eps_min, self.epsilon * self.eps_decay)
 
     def set_eval_mode(self) -> None:
-        self.agent_net.eval()
+        if self.share_parameters:
+            self.agent_net.eval()
+        else:
+            self.agent_nets.eval()
         self.mixing_net.eval()
 
     def set_train_mode(self) -> None:
-        self.agent_net.train()
+        if self.share_parameters:
+            self.agent_net.train()
+        else:
+            self.agent_nets.train()
         self.mixing_net.train()

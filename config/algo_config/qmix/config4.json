@@ -1,5 +1,6 @@
 {
     "training_eps" : 1000,
+    "share_parameters" : false,
 
     "eps_init" : 0.9,
     "eps_decay" : 0.997,

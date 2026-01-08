@@ -133,6 +133,7 @@ if __name__ == "__main__":
     params.update(alg_params)
     params.update(env_params)
     params.update(task_params)
+    params.setdefault("share_parameters", True)
     del params["desc"], env_params, task_params
 
     # Expose config values as local variables for consistency with other scripts.
@@ -304,6 +305,7 @@ if __name__ == "__main__":
         mixing_embed_dim=mixing_embed_dim,
         hypernet_embed=hypernet_embed,
         max_grad_norm=max_grad_norm,
+        share_parameters=share_parameters,
     )
     agent_lookup = {str(agent.id): agent for agent in env.machine_agents}
     for agent in env.machine_agents:
@@ -341,7 +343,11 @@ if __name__ == "__main__":
                 action = None
             else:
                 # Choose an action with masking for invalid routes.
-                action = qmix.act(obs, action_mask=action_mask)
+                action = qmix.act(
+                    obs,
+                    action_mask=action_mask,
+                    agent_index=agent_id_to_index[agent_id],
+                )
                 episode_obs[agent_id] = obs
                 episode_actions[agent_id] = action
 
@@ -463,7 +469,11 @@ if __name__ == "__main__":
                 action = None
             else:
                 # Action masking is still applied during evaluation.
-                action = qmix.act(obs, action_mask=action_mask)
+                action = qmix.act(
+                    obs,
+                    action_mask=action_mask,
+                    agent_index=agent_id_to_index[agent_id],
+                )
             env.step(action)
         pbar.update()
         last_logged_episode = log_new_episodes(
