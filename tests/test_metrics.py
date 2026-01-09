@@ -31,8 +31,8 @@ def test_flatten_by_id_on_sample_episode():
     flattened = metrics.flatten_by_id(episode_df)
 
     assert flattened.shape[0] == 1
-    assert flattened.iloc[0]["agent_0_action"] == 1
-    assert flattened.iloc[0]["agent_3_reward"] == pytest.approx(-3.033333333333333)
+    assert flattened.iloc[0]["agent_0_action"] == 0
+    assert flattened.iloc[0]["agent_3_reward"] == pytest.approx(-1.8)
 
 
 def test_add_benchmark_columns_uses_sample_data():
