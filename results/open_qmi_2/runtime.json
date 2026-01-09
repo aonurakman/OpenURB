@@ -1,0 +1,22 @@
+{
+    "experiment": {
+        "id": "open_qmi_2",
+        "script": "open_qmix.py",
+        "alg_config": "config2",
+        "task_config": "dynamic1",
+        "env_config": "config1"
+    },
+    "timing": {
+        "start_local": "2026-01-08 17:33:02 CET",
+        "end_local": "2026-01-09 13:19:32 CET",
+        "duration": "19:46:30.364"
+    },
+    "resources": {
+        "cpu_user_sec": 4835.974,
+        "cpu_system_sec": 2138.73,
+        "voluntary_context_switches": 368358410,
+        "involuntary_context_switches": 47602584,
+        "peak_memory_mb": 594.25,
+        "records_folder_size_mb": 112.702
+    }
+}
