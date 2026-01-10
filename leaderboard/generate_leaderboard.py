@@ -38,6 +38,21 @@ REQUIRED_STRING_KEYS = [
     "hero_text",
     "controls_hint",
     "download_csv_label",
+    "filters_title",
+    "filters_hint",
+    "filter_exp_type_label",
+    "filter_env_label",
+    "filter_task_label",
+    "filter_network_label",
+    "filter_action_all",
+    "filter_action_none",
+    "isolate_label",
+    "show_all_label",
+    "deselect_label",
+    "collapse_folds_label",
+    "merge_folds_label",
+    "filter_summary",
+    "filter_empty",
     "compare_column_label",
     "compare_title",
     "compare_label_left",
@@ -190,8 +205,20 @@ def collapse_versioned_experiments(experiments: List[Dict]) -> List[Dict]:
         merged["metric_order"] = anchor.get("metric_order")
         merged["fold_count"] = len(group)
         if merged["fold_count"] > 1:
-            merged["env_seed"] = "varies"
-            merged["torch_seed"] = "varies"
+            env_seeds = {
+                exp.get("env_seed") for exp in group if exp.get("env_seed") not in (None, "")
+            }
+            torch_seeds = {
+                exp.get("torch_seed") for exp in group if exp.get("torch_seed") not in (None, "")
+            }
+            if len(env_seeds) > 1:
+                merged["env_seed"] = "varies"
+            elif env_seeds and merged.get("env_seed") in (None, ""):
+                merged["env_seed"] = next(iter(env_seeds))
+            if len(torch_seeds) > 1:
+                merged["torch_seed"] = "varies"
+            elif torch_seeds and merged.get("torch_seed") in (None, ""):
+                merged["torch_seed"] = next(iter(torch_seeds))
         collapsed.append(merged)
 
     return collapsed
@@ -302,6 +329,13 @@ def build_html(payload: Dict, output_path: Path, template: str) -> None:
         "__HERO_TEXT__": strings["hero_text"],
         "__CONTROLS_HINT__": strings["controls_hint"],
         "__DOWNLOAD_LABEL__": strings["download_csv_label"],
+        "__FILTERS_TITLE__": strings["filters_title"],
+        "__FILTERS_HINT__": strings["filters_hint"],
+        "__ISOLATE_LABEL__": strings["isolate_label"],
+        "__SHOW_ALL_LABEL__": strings["show_all_label"],
+        "__DESELECT_LABEL__": strings["deselect_label"],
+        "__COLLAPSE_FOLDS_LABEL__": strings["collapse_folds_label"],
+        "__MERGE_FOLDS_LABEL__": strings["merge_folds_label"],
         "__COMPARE_TITLE__": strings["compare_title"],
         "__COMPARE_SLIDER_LABEL__": strings["compare_slider_label"],
         "__FOOTER_HINT__": strings["footer_hint"],
@@ -357,8 +391,11 @@ def main(args: Optional[Sequence[str]] = None) -> None:
 
     strings = load_strings(parsed.strings_path)
     template = load_template(parsed.template_path)
-    experiments = collapse_versioned_experiments(collect_experiments(parsed.results_dir))
+    raw_experiments = collect_experiments(parsed.results_dir)
+    experiments = collapse_versioned_experiments(raw_experiments)
     base_url = parsed.repo_url.rstrip("/") + "/" if parsed.repo_url else ""
+    for exp in raw_experiments:
+        exp["exp_link"] = base_url + exp["exp_path"]
     for exp in experiments:
         exp["exp_link"] = base_url + exp["exp_path"]
 
@@ -368,6 +405,7 @@ def main(args: Optional[Sequence[str]] = None) -> None:
         .replace("+00:00", "Z"),
         "results_dir": str(parsed.results_dir),
         "experiments": experiments,
+        "raw_experiments": raw_experiments,
         "strings": strings,
     }
 

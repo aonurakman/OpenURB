@@ -112,6 +112,12 @@
       border-color: transparent;
       box-shadow: 0 12px 30px rgba(54, 85, 255, 0.2);
     }
+    .tab.active:hover {
+      background: linear-gradient(120deg, #4b6bff, #10d1ba);
+    }
+    .tab:not(.active):hover {
+      background: #eef2ff;
+    }
     .tab:hover {
       transform: translateY(-1px);
     }
@@ -174,6 +180,9 @@
     tbody tr:hover td {
       background: #f6f8ff;
     }
+    tbody tr.row-selected td {
+      background: #eaf0ff;
+    }
     .pill {
       display: inline-flex;
       align-items: center;
@@ -196,9 +205,98 @@
       align-items: center;
       justify-content: space-between;
       flex-wrap: wrap;
-      margin-bottom: 6px;
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #e7eaf7;
       color: var(--muted);
       font-size: 13px;
+    }
+    .controls-right {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .filters-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .filters-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #0f172a;
+    }
+    .filters-hint {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .filter-group {
+      background: #f8f9ff;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+    }
+    .filter-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .filter-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #0f172a;
+    }
+    .filter-actions {
+      display: inline-flex;
+      gap: 6px;
+    }
+    .filter-action {
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      color: #475569;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    }
+    .filter-action:hover {
+      border-color: #c7d2fe;
+      color: #1f2937;
+      background: #eef2ff;
+    }
+    .filter-options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .filter-option {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #e2e8f0;
+      background: #ffffff;
+      color: #1f2937;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .filter-option input {
+      margin: 0;
+      accent-color: var(--accent);
     }
     .hint {
       color: var(--muted);
@@ -209,7 +307,8 @@
       text-align: center;
       margin-top: 18px;
     }
-    .download-btn {
+    .download-btn,
+    .action-btn {
       border: 1px solid var(--border);
       background: #ffffff;
       color: #1f2937;
@@ -217,15 +316,18 @@
       border-radius: 10px;
       font-weight: 600;
       cursor: pointer;
-      transition: all 0.15s ease;
+      transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.15s ease;
       box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
     }
-    .download-btn:hover {
+    .download-btn:hover,
+    .action-btn:hover {
       transform: translateY(-1px);
       border-color: #c7d2fe;
       box-shadow: 0 10px 20px rgba(15, 23, 42, 0.12);
+      background: #f3f4ff;
     }
-    .download-btn:active {
+    .download-btn:active,
+    .action-btn:active {
       transform: translateY(0);
       box-shadow: 0 4px 12px rgba(15, 23, 42, 0.1);
     }
@@ -246,15 +348,29 @@
       color: inherit;
     }
     .fold-star {
-      color: #f59e0b;
-      font-size: 12px;
-      margin-left: 4px;
-      vertical-align: super;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2px 7px;
+      margin-left: 6px;
+      border-radius: 999px;
+      background: #eef2ff;
+      border: 1px solid #c7d2fe;
+      color: #3730a3;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      vertical-align: middle;
     }
     .exp-cell {
       display: inline-flex;
       align-items: center;
       gap: 4px;
+    }
+    .metric-best {
+      font-weight: 700;
+      color: #0f172a;
     }
     .preview-card {
       position: fixed;
@@ -316,6 +432,12 @@
     }
     .compare-panel.visible {
       display: block;
+    }
+    .compare-panel.single .compare-img-right,
+    .compare-panel.single .compare-divider,
+    .compare-panel.single .compare-slider,
+    .compare-panel.single .compare-right {
+      display: none;
     }
     .compare-header {
       display: flex;
@@ -444,12 +566,21 @@
 
     <div class="card">
       <div class="controls">
-        <div>__CONTROLS_HINT__</div>
-        <button class="download-btn" id="download-csv">__DOWNLOAD_LABEL__</button>
-        <div id="combo-count"></div>
+        <div class="controls-right">
+          <div id="combo-count"></div>
+          <button class="action-btn" id="isolate-btn">__ISOLATE_LABEL__</button>
+          <button class="action-btn" id="fold-toggle-btn">__COLLAPSE_FOLDS_LABEL__</button>
+          <button class="action-btn" id="deselect-btn">__DESELECT_LABEL__</button>
+          <button class="download-btn action-btn" id="download-csv">__DOWNLOAD_LABEL__</button>
+        </div>
       </div>
-      <div class="tabs" id="type-tabs"></div>
-      <div class="tabs" id="tabs"></div>
+      <div class="filters-header">
+        <div>
+          <div class="filters-title">__FILTERS_TITLE__</div>
+          <div class="filters-hint">__FILTERS_HINT__</div>
+        </div>
+      </div>
+      <div class="filters" id="filters"></div>
       <div id="table-container"></div>
       <div class="compare-panel" id="compare-panel" aria-hidden="true">
         <div class="compare-header">
@@ -459,7 +590,7 @@
               <span class="compare-dot compare-left-dot"></span>
               <span id="compare-left-label"></span>
             </div>
-            <div class="compare-label">
+            <div class="compare-label compare-right">
               <span class="compare-dot compare-right-dot"></span>
               <span id="compare-right-label"></span>
             </div>
@@ -487,12 +618,14 @@
     const leaderboardData = __DATA__;
     const strings = leaderboardData.strings || {};
 
-    const typeTabsEl = document.getElementById('type-tabs');
-    const tabsEl = document.getElementById('tabs');
+    const filtersEl = document.getElementById('filters');
     const tableContainer = document.getElementById('table-container');
     const comboCountEl = document.getElementById('combo-count');
     const statsPill = document.getElementById('stats-pill');
     const downloadBtn = document.getElementById('download-csv');
+    const isolateBtn = document.getElementById('isolate-btn');
+    const deselectBtn = document.getElementById('deselect-btn');
+    const foldToggleBtn = document.getElementById('fold-toggle-btn');
     const previewCard = document.getElementById('preview-card');
     const previewTitle = document.getElementById('preview-title');
     const previewImg = document.getElementById('preview-img');
@@ -514,13 +647,15 @@
     const unknownEnv = strings.unknown_env || '';
     const unknownTask = strings.unknown_task || '';
     const unknownNetwork = strings.unknown_network || '';
-    const comboSeparator = strings.combo_key_separator || ' | ';
-    const tabSeparator = strings.tab_separator || ' | ';
     const naLabel = strings.na_label || '';
     const previewPath = strings.preview_image_path || '';
     const compareColumnLabel = strings.compare_column_label || '';
     const compareLabelLeftTemplate = strings.compare_label_left || '';
     const compareLabelRightTemplate = strings.compare_label_right || '';
+    const isolateLabel = strings.isolate_label || 'Isolate';
+    const showAllLabel = strings.show_all_label || 'Show all';
+    const collapseFoldsLabel = strings.collapse_folds_label || 'Collapse folds';
+    const mergeFoldsLabel = strings.merge_folds_label || 'Merge folds';
 
     function formatString(template, values) {
       if (!template) return '';
@@ -534,100 +669,234 @@
 
     statsPill.textContent = strings.stats_loading || '';
 
-    const grouped = {};
-    const typeCounts = {};
     const typeOrder = ['normal', 'open', 'cond_open'];
-    for (const exp of leaderboardData.experiments) {
-      const expType = exp.exp_type || 'normal';
-      const comboKey = [
-        exp.env_config || unknownEnv,
-        exp.task_config || unknownTask,
-        exp.network || unknownNetwork,
-      ].join(comboSeparator);
-      if (!grouped[expType]) grouped[expType] = {};
-      if (!grouped[expType][comboKey]) grouped[expType][comboKey] = [];
-      grouped[expType][comboKey].push(exp);
-      typeCounts[expType] = (typeCounts[expType] || 0) + 1;
+    const collapsedData = leaderboardData.experiments || [];
+    const rawData = leaderboardData.raw_experiments || leaderboardData.experiments || [];
+    let useCollapsedFolds = true;
+    let experiments = [];
+    let filterConfig = [];
+    let filterState = {};
+
+    function normalizeExperiments(source) {
+      return (source || []).map((exp) => ({
+        ...exp,
+        exp_type: exp.exp_type || 'normal',
+        env_config: exp.env_config || unknownEnv,
+        task_config: exp.task_config || unknownTask,
+        network: exp.network || unknownNetwork,
+      }));
     }
 
-    const typeKeys = Object.keys(grouped).sort((a, b) => {
-      const aIndex = typeOrder.indexOf(a);
-      const bIndex = typeOrder.indexOf(b);
-      if (aIndex === -1 && bIndex === -1) return a.localeCompare(b);
-      if (aIndex === -1) return 1;
-      if (bIndex === -1) return -1;
-      return aIndex - bIndex;
-    });
-    statsPill.textContent = formatString(strings.stats_pill, {
-      count: leaderboardData.experiments.length,
-    });
-
-    let activeType = typeKeys[0] || null;
-    let activeTab = null;
-
-    function comboKeysForType() {
-      if (!activeType || !grouped[activeType]) return [];
-      return Object.keys(grouped[activeType]).sort();
+    function uniqueValuesFrom(items, key) {
+      const set = new Set();
+      items.forEach((exp) => {
+        const value = exp[key];
+        if (value !== undefined && value !== null && value !== '') {
+          set.add(value);
+        }
+      });
+      return Array.from(set);
     }
 
-    function ensureActiveTab() {
-      const comboKeys = comboKeysForType();
-      if (!comboKeys.length) {
-        activeTab = null;
-      } else if (!activeTab || !comboKeys.includes(activeTab)) {
-        activeTab = comboKeys[0];
+    function sortValues(key, values) {
+      if (key === 'exp_type') {
+        return values.sort((a, b) => {
+          const aIndex = typeOrder.indexOf(a);
+          const bIndex = typeOrder.indexOf(b);
+          if (aIndex === -1 && bIndex === -1) return a.localeCompare(b);
+          if (aIndex === -1) return 1;
+          if (bIndex === -1) return -1;
+          return aIndex - bIndex;
+        });
       }
-      return comboKeys;
+      return values.sort((a, b) => String(a).localeCompare(String(b)));
     }
 
-    function renderTypeTabs() {
-      typeTabsEl.innerHTML = '';
-      if (!typeKeys.length) return;
-      typeKeys.forEach((key) => {
-        const btn = document.createElement('button');
-        btn.className = 'tab' + (key === activeType ? ' active' : '');
-        const label = typeLabels[key] || key;
-        const count = typeCounts[key] || 0;
-        const countLabel = formatString(strings.type_tab_count, { count });
-        btn.innerHTML = `<strong>${label}</strong><small>${countLabel}</small>`;
-        btn.onclick = () => {
-          activeType = key;
-          activeTab = null;
-          renderTypeTabs();
-          renderTabs();
-          renderTable();
-        };
-        typeTabsEl.appendChild(btn);
+    function buildFilterConfig(items) {
+      return [
+        {
+          key: 'exp_type',
+          label: strings.filter_exp_type_label || 'Experiment type',
+          values: sortValues('exp_type', uniqueValuesFrom(items, 'exp_type')),
+          display: (value) => typeLabels[value] || value,
+        },
+        {
+          key: 'env_config',
+          label: strings.filter_env_label || 'Env config',
+          values: sortValues('env_config', uniqueValuesFrom(items, 'env_config')),
+        },
+        {
+          key: 'task_config',
+          label: strings.filter_task_label || 'Task config',
+          values: sortValues('task_config', uniqueValuesFrom(items, 'task_config')),
+        },
+        {
+          key: 'network',
+          label: strings.filter_network_label || 'Traffic network',
+          values: sortValues('network', uniqueValuesFrom(items, 'network')),
+        },
+      ];
+    }
+
+    function updateStatsPill() {
+      statsPill.textContent = formatString(strings.stats_pill, {
+        count: experiments.length,
       });
     }
 
-    function renderTabs() {
-      tabsEl.innerHTML = '';
-      const comboKeys = ensureActiveTab();
-      if (!comboKeys.length) {
-        comboCountEl.textContent = strings.combo_empty || '';
-        return;
-      }
-      const typeLabel = typeLabels[activeType] || activeType;
-      comboCountEl.textContent = formatString(strings.combo_summary, {
-        typeLabel,
-        experimentCount: typeCounts[activeType] || 0,
-        tabCount: comboKeys.length,
+    function rebuildFilters({ preserveSelections = true } = {}) {
+      const previousState = preserveSelections ? filterState : null;
+      experiments = normalizeExperiments(useCollapsedFolds ? collapsedData : rawData);
+      filterConfig = buildFilterConfig(experiments);
+      const nextState = {};
+      filterConfig.forEach((cfg) => {
+        let selectedValues = cfg.values;
+        if (previousState && previousState[cfg.key]) {
+          const previousValues = previousState[cfg.key];
+          if (previousValues.size === 0) {
+            selectedValues = [];
+          } else {
+            selectedValues = cfg.values.filter((value) => previousValues.has(value));
+            if (selectedValues.length === 0) {
+              selectedValues = cfg.values;
+            }
+          }
+        }
+        nextState[cfg.key] = new Set(selectedValues);
       });
-      comboKeys.forEach((key) => {
-        const btn = document.createElement('button');
-        btn.className = 'tab' + (key === activeTab ? ' active' : '');
-        const parts = key.split(comboSeparator);
-        const envLabel = strings.tab_env_label || '';
-        const taskLabel = strings.tab_task_label || '';
-        const networkLabel = strings.tab_network_label || '';
-        btn.innerHTML = `<strong>${envLabel}: ${parts[0]}</strong><small>${taskLabel}: ${parts[1]}${tabSeparator}${networkLabel}: ${parts[2]}</small>`;
-        btn.onclick = () => {
-          activeTab = key;
-          renderTabs();
+      filterState = nextState;
+      renderFilters();
+      updateStatsPill();
+      updateIsolateButton();
+      updateFoldToggleButton();
+      renderTable();
+    }
+
+    function renderFilters() {
+      filtersEl.innerHTML = '';
+      filterConfig.forEach((cfg) => {
+        const group = document.createElement('div');
+        group.className = 'filter-group';
+
+        const header = document.createElement('div');
+        header.className = 'filter-header';
+
+        const label = document.createElement('div');
+        label.className = 'filter-label';
+        label.textContent = cfg.label;
+
+        const actions = document.createElement('div');
+        actions.className = 'filter-actions';
+        const allBtn = document.createElement('button');
+        allBtn.type = 'button';
+        allBtn.className = 'filter-action';
+        allBtn.textContent = strings.filter_action_all || 'All';
+        allBtn.addEventListener('click', () => {
+          filterState[cfg.key] = new Set(cfg.values);
+          renderFilters();
           renderTable();
-        };
-        tabsEl.appendChild(btn);
+        });
+        const noneBtn = document.createElement('button');
+        noneBtn.type = 'button';
+        noneBtn.className = 'filter-action';
+        noneBtn.textContent = strings.filter_action_none || 'None';
+        noneBtn.addEventListener('click', () => {
+          filterState[cfg.key].clear();
+          renderFilters();
+          renderTable();
+        });
+        actions.appendChild(allBtn);
+        actions.appendChild(noneBtn);
+
+        header.appendChild(label);
+        header.appendChild(actions);
+
+        const options = document.createElement('div');
+        options.className = 'filter-options';
+        cfg.values.forEach((value) => {
+          const option = document.createElement('label');
+          option.className = 'filter-option';
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.checked = filterState[cfg.key].has(value);
+          checkbox.addEventListener('change', () => {
+            if (checkbox.checked) {
+              filterState[cfg.key].add(value);
+            } else {
+              filterState[cfg.key].delete(value);
+            }
+            renderTable();
+          });
+          const text = document.createElement('span');
+          text.textContent = cfg.display ? cfg.display(value) : value;
+          option.appendChild(checkbox);
+          option.appendChild(text);
+          options.appendChild(option);
+        });
+
+        group.appendChild(header);
+        group.appendChild(options);
+        filtersEl.appendChild(group);
+      });
+    }
+
+    function baseFilteredExperiments() {
+      return experiments.filter((exp) =>
+        filterConfig.every((cfg) => filterState[cfg.key].has(exp[cfg.key]))
+      );
+    }
+
+    function filteredExperiments() {
+      const base = baseFilteredExperiments();
+      if (!isolateSelected) return base;
+      if (!selectedRowIds.size) return [];
+      return base.filter((exp) => selectedRowIds.has(exp.exp_id));
+    }
+
+    function updateFilterSummary(filtered) {
+      comboCountEl.textContent = formatString(strings.filter_summary, {
+        shown: filtered.length,
+        total: experiments.length,
+      });
+    }
+
+    function updateIsolateButton() {
+      if (!isolateBtn) return;
+      isolateBtn.textContent = isolateSelected ? showAllLabel : isolateLabel;
+    }
+
+    function updateFoldToggleButton() {
+      if (!foldToggleBtn) return;
+      foldToggleBtn.textContent = useCollapsedFolds ? collapseFoldsLabel : mergeFoldsLabel;
+    }
+
+    if (isolateBtn) {
+      isolateBtn.addEventListener('click', () => {
+        isolateSelected = !isolateSelected;
+        updateIsolateButton();
+        renderTable();
+      });
+    }
+
+    if (foldToggleBtn) {
+      foldToggleBtn.addEventListener('click', () => {
+        useCollapsedFolds = !useCollapsedFolds;
+        isolateSelected = false;
+        selectedRowIds.clear();
+        updateIsolateButton();
+        rebuildFilters({ preserveSelections: true });
+      });
+    }
+
+    if (deselectBtn) {
+      deselectBtn.addEventListener('click', () => {
+        selectedRowIds.clear();
+        if (isolateSelected) {
+          renderTable();
+          return;
+        }
+        const rows = tableContainer.querySelectorAll('tbody tr');
+        rows.forEach((row) => row.classList.remove('row-selected'));
       });
     }
 
@@ -767,6 +1036,8 @@
     });
 
     let selectedExperiments = [];
+    let selectedRowIds = new Set();
+    let isolateSelected = false;
 
     function updateCompareSlider(value) {
       const percent = Number(value);
@@ -792,26 +1063,36 @@
     }
 
     function updateComparePanel() {
-      if (selectedExperiments.length !== 2) {
-        comparePanel.classList.remove('visible');
+      if (selectedExperiments.length === 0) {
+        comparePanel.classList.remove('visible', 'single', 'dual');
         comparePanel.setAttribute('aria-hidden', 'true');
         return;
       }
+
       const leftExp = selectedExperiments[0];
       const rightExp = selectedExperiments[1];
       compareLeftLabel.textContent = formatString(compareLabelLeftTemplate, { expId: leftExp.exp_id });
-      compareRightLabel.textContent = formatString(compareLabelRightTemplate, { expId: rightExp.exp_id });
-
       const leftCandidates = previewCandidatesFor(leftExp);
-      const rightCandidates = previewCandidatesFor(rightExp);
       loadCompareImage(compareImgLeft, leftCandidates);
-      loadCompareImage(compareImgRight, rightCandidates);
       compareImgLeft.alt = formatString(strings.preview_alt_template, { expId: leftExp.exp_id });
+
+      if (selectedExperiments.length === 1) {
+        comparePanel.classList.add('visible', 'single');
+        comparePanel.classList.remove('dual');
+        compareRightLabel.textContent = '';
+        comparePanel.setAttribute('aria-hidden', 'false');
+        return;
+      }
+
+      comparePanel.classList.remove('single');
+      comparePanel.classList.add('visible', 'dual');
+      compareRightLabel.textContent = formatString(compareLabelRightTemplate, { expId: rightExp.exp_id });
+      const rightCandidates = previewCandidatesFor(rightExp);
+      loadCompareImage(compareImgRight, rightCandidates);
       compareImgRight.alt = formatString(strings.preview_alt_template, { expId: rightExp.exp_id });
 
       compareSlider.value = 50;
       updateCompareSlider(50);
-      comparePanel.classList.add('visible');
       comparePanel.setAttribute('aria-hidden', 'false');
     }
 
@@ -825,20 +1106,91 @@
     function renderTable() {
       tableContainer.innerHTML = '';
       clearComparison();
-      if (!activeType || !activeTab) {
+      const experiments = filteredExperiments();
+      updateFilterSummary(experiments);
+      if (!experiments.length) {
         const empty = document.createElement('div');
         empty.className = 'empty';
-        empty.textContent = strings.empty_no_experiments || '';
+        empty.textContent = strings.filter_empty || strings.empty_no_experiments || '';
         tableContainer.appendChild(empty);
         return;
       }
-      const experiments = grouped[activeType]?.[activeTab];
-      if (!experiments || !experiments.length) {
-        const empty = document.createElement('div');
-        empty.className = 'empty';
-        empty.textContent = strings.empty_no_group || '';
-        tableContainer.appendChild(empty);
-        return;
+
+      function uniqueValuesFrom(items, key) {
+        const set = new Set();
+        items.forEach((exp) => {
+          const value = exp[key];
+          if (value !== undefined && value !== null && value !== '') {
+            set.add(value);
+          }
+        });
+        return Array.from(set);
+      }
+
+      function buildExtraColumns(items) {
+        const candidates = [
+          {
+            key: 'exp_type',
+            label: strings.filter_exp_type_label || 'Experiment type',
+            format: (value) => typeLabels[value] || value,
+          },
+          { key: 'env_config', label: strings.filter_env_label || 'Env config' },
+          { key: 'task_config', label: strings.filter_task_label || 'Task config' },
+          { key: 'network', label: strings.filter_network_label || 'Traffic network' },
+        ];
+        return candidates.filter((cfg) => uniqueValuesFrom(items, cfg.key).length > 1);
+      }
+
+      function metricPreference(metricKey) {
+        const key = String(metricKey || '').toLowerCase();
+        const description = (metricDescriptions[metricKey] || '').toLowerCase();
+        const overrides = {
+          diff_sumo_routerl: 'max',
+          dynamic_recovery: 'max',
+          avg_speed_pre: 'max',
+          avg_speed_test: 'max',
+          avg_mileage_pre: 'min',
+          avg_mileage_test: 'min',
+        };
+        if (overrides[key]) return overrides[key];
+        if (description.includes('favors') || description.includes('ratio')) return 'max';
+        if (key.includes('ratio') || key.includes('advantage') || key.includes('winrate')) return 'max';
+        if (key.includes('speed') || description.includes('avg speed')) return 'max';
+        if (key.includes('recovery')) return 'max';
+        if (description.includes('std dev') || description.includes('volatility')) return 'min';
+        if (description.includes('instability') || description.includes('time lost')) return 'min';
+        if (description.includes('switch') || key.includes('switch')) return 'min';
+        if (description.includes('cost') || description.includes('loss') || key.includes('cost') || key.includes('loss')) return 'min';
+        if (key.startsWith('t_') || key.includes('time')) return 'min';
+        if (key.includes('mileage')) return 'min';
+        return 'max';
+      }
+
+      function computeBestMetrics(items, metrics) {
+        const best = {};
+        const directions = {};
+        metrics.forEach((metric) => {
+          directions[metric] = metricPreference(metric);
+        });
+        items.forEach((exp) => {
+          metrics.forEach((metric) => {
+            const raw = exp.metrics?.[metric];
+            const value = Number(raw);
+            if (raw === null || raw === undefined || raw === '' || Number.isNaN(value)) {
+              return;
+            }
+            if (!(metric in best)) {
+              best[metric] = value;
+              return;
+            }
+            if (directions[metric] === 'min') {
+              if (value < best[metric]) best[metric] = value;
+            } else if (value > best[metric]) {
+              best[metric] = value;
+            }
+          });
+        });
+        return { best, directions };
       }
 
       const metricCols = [];
@@ -869,6 +1221,7 @@
       compareHeader.dataset.skipCsv = 'true';
       compareHeader.className = 'compare-header-cell';
       headerRow.appendChild(compareHeader);
+      const extraColumns = buildExtraColumns(experiments);
       const baseHeaders = [
         { key: 'exp_id', label: headerLabels.exp_id },
         { key: 'algorithm', label: headerLabels.algorithm },
@@ -896,7 +1249,13 @@
         return th;
       }
 
-      baseHeaders.forEach((h) => headerRow.appendChild(headerCell(h)));
+      if (baseHeaders.length) {
+        headerRow.appendChild(headerCell(baseHeaders[0]));
+      }
+      extraColumns.forEach((col) =>
+        headerRow.appendChild(headerCell({ key: col.key, label: col.label }))
+      );
+      baseHeaders.slice(1).forEach((h) => headerRow.appendChild(headerCell(h)));
       metricCols.forEach((m) =>
         headerRow.appendChild(
           headerCell({ key: m, label: m, description: metricDescriptions[m] })
@@ -906,6 +1265,10 @@
       table.appendChild(thead);
 
       const tbody = document.createElement('tbody');
+      const { best: bestMetrics, directions: metricDirections } = computeBestMetrics(
+        experiments,
+        metricCols
+      );
       experiments.forEach((exp) => {
         const tr = document.createElement('tr');
         const compareTd = document.createElement('td');
@@ -914,7 +1277,8 @@
         const compareCheckbox = document.createElement('input');
         compareCheckbox.type = 'checkbox';
         compareCheckbox.className = 'compare-checkbox';
-        compareCheckbox.addEventListener('change', () => {
+        compareCheckbox.addEventListener('change', (evt) => {
+          evt.stopPropagation();
           if (compareCheckbox.checked) {
             if (selectedExperiments.length >= 2) {
               compareCheckbox.checked = false;
@@ -927,6 +1291,9 @@
             selectedExperiments = selectedExperiments.filter((item) => item.exp_id !== exp.exp_id);
           }
           updateComparePanel();
+        });
+        compareCheckbox.addEventListener('click', (evt) => {
+          evt.stopPropagation();
         });
         compareTd.appendChild(compareCheckbox);
         tr.appendChild(compareTd);
@@ -946,7 +1313,7 @@
           const star = document.createElement('span');
           star.className = 'fold-star';
           star.title = formatString(strings.folds_tooltip, { folds: exp.fold_count });
-          star.textContent = '*';
+          star.textContent = 'avg';
           expWrap.appendChild(star);
         }
         const previewList = previewCandidatesFor(exp);
@@ -955,6 +1322,34 @@
         expWrap.addEventListener('mouseleave', hidePreview);
         expTd.appendChild(expWrap);
         tr.appendChild(expTd);
+        const expRowId = exp.exp_id || '';
+        tr.dataset.expId = expRowId;
+        if (selectedRowIds.has(expRowId)) {
+          tr.classList.add('row-selected');
+        }
+        tr.addEventListener('click', () => {
+          if (selectedRowIds.has(expRowId)) {
+            selectedRowIds.delete(expRowId);
+            tr.classList.remove('row-selected');
+          } else {
+            selectedRowIds.add(expRowId);
+            tr.classList.add('row-selected');
+          }
+          if (isolateSelected) {
+            renderTable();
+          }
+        });
+        extraColumns.forEach((col) => {
+          const td = document.createElement('td');
+          const rawValue = exp[col.key];
+          const value = rawValue === null || rawValue === undefined || rawValue === ''
+            ? naLabel
+            : rawValue;
+          const display = col.format ? col.format(value) : value;
+          td.textContent = display;
+          td.dataset.value = rawValue ?? '';
+          tr.appendChild(td);
+        });
         const cells = [
           exp.algorithm || naLabel,
           exp.script || naLabel,
@@ -969,8 +1364,24 @@
         });
         metricCols.forEach((metric) => {
           const td = document.createElement('td');
-          td.textContent = formattedValue(exp.metrics?.[metric]);
-          td.dataset.value = exp.metrics?.[metric] ?? '';
+          const raw = exp.metrics?.[metric];
+          const value = Number(raw);
+          td.textContent = formattedValue(raw);
+          td.dataset.value = raw ?? '';
+          const bestValue = bestMetrics[metric];
+          if (
+            bestValue !== undefined &&
+            raw !== null &&
+            raw !== undefined &&
+            raw !== '' &&
+            !Number.isNaN(value)
+          ) {
+            const epsilon = 1e-9 * Math.max(1, Math.abs(bestValue));
+            if (Math.abs(value - bestValue) <= epsilon) {
+              td.classList.add('metric-best');
+              td.dataset.best = metricDirections[metric] || '';
+            }
+          }
           tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -1025,9 +1436,7 @@
       }
     }
 
-    renderTypeTabs();
-    renderTabs();
-    renderTable();
+    rebuildFilters({ preserveSelections: false });
 
     function sanitizeSlug(value) {
       const seed = value || strings.slug_default || '';
@@ -1035,6 +1444,21 @@
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '_')
         .replace(/^_+|_+$/g, '');
+    }
+
+    function filterSlugPart(cfg) {
+      const selected = cfg.values.filter((value) => filterState[cfg.key].has(value));
+      if (!selected.length) {
+        return `${cfg.key}_${strings.slug_default || 'none'}`;
+      }
+      if (selected.length === cfg.values.length) {
+        return `${cfg.key}_${strings.slug_all || 'all'}`;
+      }
+      return `${cfg.key}_${selected.join('-')}`;
+    }
+
+    function buildFilterSlug() {
+      return sanitizeSlug(filterConfig.map(filterSlugPart).join('_'));
     }
 
     function csvEscape(value) {
@@ -1071,7 +1495,7 @@
         rows.push(values.join(','));
       });
 
-      const slug = sanitizeSlug(`${activeType || strings.slug_default || ''}_${activeTab || strings.slug_all || ''}`);
+      const slug = buildFilterSlug();
       const filename = formatString(strings.csv_filename, { slug });
       const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
