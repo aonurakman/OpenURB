@@ -54,5 +54,5 @@
         "Dynamic switches",
         "Testing phase"
     ],
-    "command": "scripts/cond_open_iql.py --id cond1 --net ing_small --alg-conf config1 --task-conf dynamic1 --env-conf config1"
+    "command": "scripts/cond_open_iql.py --id cond_iql_1 --net ing_small --alg-conf config1 --task-conf dynamic1 --env-conf config1"
 }
