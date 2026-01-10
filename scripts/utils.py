@@ -3,7 +3,9 @@ import glob
 import os
 import json
 import sys
+import subprocess
 import time
+import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Any, Dict
@@ -203,6 +205,32 @@ def finish_wandb_run(wb_run, last_logged: int) -> None:
         return
     wb_run.log({"status": "finished"}, step=last_logged + 1)
     wb_run.finish()
+
+
+def run_metrics(exp_id: str, repo_root: str, verbose: bool = False) -> None:
+    """Run the post-processing metrics script for a completed experiment."""
+    metrics_script = os.path.join(repo_root, "analysis", "metrics.py")
+    if not os.path.exists(metrics_script):
+        print(f"Metrics script not found at {metrics_script}. Skipping.")
+        return
+    results_folder = os.path.join(repo_root, "results")
+    metrics_path = os.path.join(results_folder, exp_id, "metrics")
+    had_metrics = os.path.exists(metrics_path)
+    cmd = [
+        sys.executable,
+        metrics_script,
+        "--id",
+        exp_id,
+        "--results-folder",
+        results_folder,
+    ]
+    if verbose:
+        cmd += ["--verbose", "True"]
+    result = subprocess.run(cmd, check=False)
+    if result.returncode != 0:
+        print(f"Warning: metrics generation failed for {exp_id} (exit code {result.returncode}).")
+        if not had_metrics and os.path.exists(metrics_path):
+            shutil.rmtree(metrics_path, ignore_errors=True)
 
 def get_episodes(ep_path: str) -> list[int]:
     """Get the episodes data

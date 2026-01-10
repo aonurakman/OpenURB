@@ -35,6 +35,7 @@ from utils import ensure_recorder_flush
 from utils import finish_wandb_run
 from utils import init_wandb_run
 from utils import log_new_episodes
+from utils import run_metrics
 from utils import start_runtime_tracking
 from utils import finish_runtime_tracking
 from baseline_models import get_baseline
@@ -420,3 +421,4 @@ if __name__ == "__main__":
         wb_run, episodes_folder, last_logged_episode, "final", env
     )
     finish_wandb_run(wb_run, last_logged_episode)
+    run_metrics(exp_id, repo_root)

@@ -11,6 +11,9 @@ Baseline scripts are `open_baselines.py` and `cond_open_baselines.py` (see `base
 for available models). The open variants run dynamic switching (conditional in the `cond_` version)
 and require task configs with `dynamic` in the name.
 
+All scripts automatically run `analysis/metrics.py` at the end of an experiment to generate KPI outputs
+in the experiment's `results/<exp_id>/metrics/` folder.
+
 ### Optional: Weights & Biases logging
 
 All experiment scripts support optional Weights & Biases logging and will stream per-episode mean
