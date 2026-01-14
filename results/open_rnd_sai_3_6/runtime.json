@@ -1,0 +1,22 @@
+{
+    "experiment": {
+        "id": "open_rnd_sai_3_6",
+        "script": "open_baselines.py",
+        "alg_config": "config1",
+        "task_config": "dynamic3",
+        "env_config": "config1"
+    },
+    "timing": {
+        "start_local": "2026-01-14 12:12:56 CET",
+        "end_local": "2026-01-14 13:01:48 CET",
+        "duration": "00:48:52.005"
+    },
+    "resources": {
+        "cpu_user_sec": 969.911,
+        "cpu_system_sec": 380.677,
+        "voluntary_context_switches": 76673049,
+        "involuntary_context_switches": 3160309,
+        "peak_memory_mb": 252.5,
+        "records_folder_size_mb": 38.038
+    }
+}
