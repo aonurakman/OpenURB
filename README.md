@@ -181,7 +181,7 @@ rewards and travel times (overall + by agent kind) as episode CSVs are written t
 python scripts/open_iql.py [--id <exp_id>] --alg-conf <hyperparam_id> --task-conf <task_id> --net <net_name> [--env-conf <env_conf_id>] [--env-seed <env_seed>] [--torch-seed <torch_seed>] [--wandb-config <path>] [--no-wandb]
 ```
 
-Use `--no-wandb` to disable logging while keeping the original disk outputs.
+Use `--no-wandb` to disable logging while keeping the original disk outputs. If `--id` is omitted, scripts auto-generate one and print it before starting.
 
 ## Baseline models
 
