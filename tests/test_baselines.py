@@ -42,7 +42,7 @@ def test_python_script_execution(script_path, baseline):
              "--id", f"test_{script_filename}_{baseline_name}",
              "--alg-conf", "test",
              "--env-conf", "test",
-             "--task-conf", "dynamic_test",
+             "--task-conf", "test",
              "--net", "saint_arnoult",
              "--model", baseline_name,
              "--no-wandb"],

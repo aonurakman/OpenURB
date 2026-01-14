@@ -38,7 +38,7 @@ def test_python_script_execution(script_path):
              "--id", f"test_{script_filename}",
              "--alg-conf", "test",
              "--env-conf", "test",
-             "--task-conf", "dynamic_test",
+             "--task-conf", "test",
              "--net", "saint_arnoult",
              "--no-wandb"],
             capture_output=True, text=True, check=True, cwd=script_path.parent

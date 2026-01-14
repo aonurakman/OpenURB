@@ -85,19 +85,24 @@ from a custom source. For compatibility, consult the
 To run the open/cond-open RL experiments, use:
 
 ```bash
-python scripts/<script_name>.py --id <exp_id> --alg-conf <hyperparam_id> --env-conf <env_conf_id> --task-conf <task_id> --net <net_name> --env-seed <env_seed> --torch-seed <torch_seed>
+python scripts/<script_name>.py [--id <exp_id>] --alg-conf <hyperparam_id> --env-conf <env_conf_id> --task-conf <task_id> --net <net_name> --env-seed <env_seed> --torch-seed <torch_seed>
 ```
 
 where
 
 - ```<script_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, ```cond_open_ippo```, and ```open_qmix```,
-- ```<exp_id>``` is your own experiment identifier, for instance ```random_ing```,
+- ```<exp_id>``` is an optional experiment identifier, for instance ```random_ing```,
 - ```<hyperparam_id>``` is the hyperparameterization identifier, it must correspond to a `.json` filename (without extension) in [`config/algo_config`](config/algo_config/). Provided scripts automatically select the algorithm-specific subfolder in this directory.
 - ```<env_conf_id>``` is the environment configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/env_config`](config/env_config/). It is used to parameterize environment-specific processes, such as path generation, disk operations, etc. It is **optional** and by default is set to `config1`.
 - ```<task_id>``` is the task configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/task_config`](config/task_config/). For this repo, use configs with `dynamic` in the name.
 - ```<net_name>``` is the name of the network you wish to use. Must be one of the folder names in ```networks/``` i.e. ```ing_small```, ```ingolstadt_custom```, ```nangis```, ```nemours```, ```provins``` or ```saint_arnoult```,
 - ```<env_seed>``` is reproducibility random seed for the traffic environment, it is **optional** and by default is set to 42,
 - ```<torch_seed>``` is reproducibility random seed for PyTorch, it is **optional** and by default is set to 42.
+
+If `--id` is omitted, scripts auto-generate an experiment ID of the form
+`<alg-name>_<net>_a<alg_config>_e<env_config>_t<task_config>_<env_seed>_<torch_seed>`.
+Conditional scripts prepend `c_` to the ID. For baselines, `<alg-name>` is the selected model and the torch seed is omitted.
+If the generated ID already exists under `results/`, `_repeated` is appended.
 
 For example, the following command runs an experiment using:
 - IQL algorithm, hyperparameterized by `config/algo_config/iql/config1.json`,
@@ -124,7 +129,7 @@ python scripts/open_qmix.py --id deneme_qmix --alg-conf config1 --task-conf dyna
 Similarly as for RL algorithms, you have to provide command, but there is one additional flag ```model``` for ```scripts/open_baselines.py```, and ```scripts/cond_open_baselines.py```, instead of ```torch-seed```, then you have command of form:
 
 ```bash
-python scripts/open_baselines.py --id <exp_id> --alg-conf <hyperparam_id> --env-conf <env_conf_id> --task-conf <task_id> --net <net_name> --env-seed <env_seed> --model <model_name>
+python scripts/open_baselines.py [--id <exp_id>] --alg-conf <hyperparam_id> --env-conf <env_conf_id> --task-conf <task_id> --net <net_name> --env-seed <env_seed> --model <model_name>
 ```
 
 For a list of available baseline models, see the **Baseline models** section below.
@@ -173,7 +178,7 @@ rewards and travel times (overall + by agent kind) as episode CSVs are written t
 2. Run:
 
 ```bash
-python scripts/open_iql.py --id <exp_id> --alg-conf <hyperparam_id> --task-conf <task_id> --net <net_name> [--env-conf <env_conf_id>] [--env-seed <env_seed>] [--torch-seed <torch_seed>] [--wandb-config <path>] [--no-wandb]
+python scripts/open_iql.py [--id <exp_id>] --alg-conf <hyperparam_id> --task-conf <task_id> --net <net_name> [--env-conf <env_conf_id>] [--env-seed <env_seed>] [--torch-seed <torch_seed>] [--wandb-config <path>] [--no-wandb]
 ```
 
 Use `--no-wandb` to disable logging while keeping the original disk outputs.

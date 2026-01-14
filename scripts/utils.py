@@ -6,6 +6,7 @@ import sys
 import subprocess
 import time
 import shutil
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Any, Dict
@@ -32,6 +33,50 @@ class RuntimeTracker:
     start_dt: datetime
     start_self_usage: Optional[Any]
     start_child_usage: Optional[Any]
+
+
+NETWORK_ABBREVIATIONS = {
+    "ing_small": "ins",
+    "saint_arnoult": "sai",
+}
+
+
+def _shorten_network_name(network: str) -> str:
+    if not network:
+        return "unk"
+    if network in NETWORK_ABBREVIATIONS:
+        return NETWORK_ABBREVIATIONS[network]
+    cleaned = re.sub(r"[^a-zA-Z0-9]", "", network).lower()
+    return cleaned[:3] if cleaned else network[:3].lower()
+
+
+def _config_tag(config_name: str) -> str:
+    if not config_name:
+        return ""
+    match = re.search(r"(\d+)$", config_name)
+    return match.group(1) if match else config_name.lower()
+
+
+def generate_exp_id(algorithm: str, network: str, alg_config: str,
+                    env_config: str, task_config: str, env_seed: int,
+                    torch_seed: Optional[int] = None, conditional: bool = False,
+                    results_root: Optional[str] = None) -> str:
+    alg_name = str(algorithm).lower()
+    net_name = _shorten_network_name(network)
+    alg_tag = _config_tag(alg_config)
+    env_tag = _config_tag(env_config)
+    task_tag = _config_tag(task_config)
+    parts = [alg_name, net_name, f"a{alg_tag}", f"e{env_tag}", f"t{task_tag}", str(env_seed)]
+    if torch_seed is not None:
+        parts.append(str(torch_seed))
+    exp_id = "_".join(parts)
+    if conditional:
+        exp_id = f"c_{exp_id}"
+    if results_root:
+        exp_path = os.path.join(results_root, exp_id)
+        if os.path.exists(exp_path):
+            exp_id = f"{exp_id}_repeated"
+    return exp_id
 
 
 def start_runtime_tracking(records_folder: str, exp_id: str, script_path: str,

@@ -36,6 +36,7 @@ from utils import finish_wandb_run
 from utils import init_wandb_run
 from utils import log_new_episodes
 from utils import run_metrics
+from utils import generate_exp_id
 from utils import start_runtime_tracking
 from utils import finish_runtime_tracking
 from baseline_models import get_baseline
@@ -43,7 +44,7 @@ from baseline_models import get_baseline
 if __name__ == "__main__":
     cl = " ".join(sys.argv)
     parser = argparse.ArgumentParser()
-    parser.add_argument('--id', type=str, required=True)
+    parser.add_argument('--id', type=str, default=None, help="Experiment ID (auto-generated if omitted).")
     parser.add_argument('--alg-conf', type=str, required=True)
     parser.add_argument('--env-conf', type=str, default="config1")
     parser.add_argument('--task-conf', type=str, required=True)
@@ -62,6 +63,19 @@ if __name__ == "__main__":
     network = args.net
     env_seed = args.env_seed
     baseline_model = args.model
+    if not exp_id:
+        exp_id = generate_exp_id(
+            baseline_model,
+            network,
+            alg_config,
+            env_config,
+            task_config,
+            env_seed,
+            torch_seed=None,
+            conditional=True,
+            results_root=os.path.join(repo_root, "results"),
+        )
+        print(f"No --id provided; generated experiment ID: {exp_id}")
     wb_run = None
     last_logged_episode = 0
     print("### STARTING EXPERIMENT ###")
