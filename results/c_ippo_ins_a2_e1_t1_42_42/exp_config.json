@@ -54,5 +54,5 @@
         "Dynamic switches",
         "Testing phase"
     ],
-    "command": "scripts/cond_open_ippo.py --id cond_ippo_2 --net ing_small --alg-conf config2 --task-conf dynamic1 --env-conf config1 --torch-seed 42 --env-seed 42"
+    "command": "scripts/cond_open_ippo.py --id c_ippo_ins_a2_e1_t1_42_42 --net ing_small --alg-conf config2 --task-conf dynamic1 --env-conf config1 --torch-seed 42 --env-seed 42"
 }

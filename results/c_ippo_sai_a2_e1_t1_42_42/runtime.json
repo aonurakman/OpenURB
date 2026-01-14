@@ -1,6 +1,6 @@
 {
     "experiment": {
-        "id": "cond_sai_ippo_2",
+        "id": "c_ippo_sai_a2_e1_t1_42_42",
         "script": "cond_open_ippo.py",
         "alg_config": "config2",
         "task_config": "dynamic1",

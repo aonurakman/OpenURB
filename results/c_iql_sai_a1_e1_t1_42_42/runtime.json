@@ -1,6 +1,6 @@
 {
     "experiment": {
-        "id": "cond_sai_iql_1",
+        "id": "c_iql_sai_a1_e1_t1_42_42",
         "script": "cond_open_iql.py",
         "alg_config": "config1",
         "task_config": "dynamic1",

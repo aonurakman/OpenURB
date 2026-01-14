@@ -31,17 +31,17 @@
     "switch_interval": 10,
     "switch_prob_humans": 0.005,
     "switch_prob_machines": 1e-05,
-    "exp_type": "cond_open",
     "script": "/Users/akman/OpenURB/scripts/cond_open_iql.py",
-    "network": "saint_arnoult",
+    "exp_type": "cond_open",
+    "network": "ing_small",
     "env_seed": 42,
     "torch_seed": 42,
     "env_config": "config1",
     "task_config": "dynamic1",
     "alg_config": "config1",
     "algorithm": "iql",
-    "num_agents": 222,
-    "num_machines": 44,
+    "num_agents": 491,
+    "num_machines": 98,
     "phases": [
         1,
         200,
@@ -54,5 +54,5 @@
         "Dynamic switches",
         "Testing phase"
     ],
-    "command": "scripts/cond_open_iql.py --id cond_sai_iql_1 --net saint_arnoult --alg-conf config1 --task-conf dynamic1 --env-conf config1 --torch-seed 42 --env-seed 42"
+    "command": "scripts/cond_open_iql.py --id c_iql_ins_a1_e1_t1_42_42 --net ing_small --alg-conf config1 --task-conf dynamic1 --env-conf config1"
 }
