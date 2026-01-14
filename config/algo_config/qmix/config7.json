@@ -1,0 +1,18 @@
+{
+    "training_eps" : 5000,
+    "share_parameters" : false,
+
+    "eps_init" : 1.0,
+    "eps_decay" : 0.9999,
+    "eps_min" : 0.01,
+    "buffer_size" : 1024,
+    "batch_size" : 8,
+    "lr" : 0.0001,
+    "num_epochs" : 1,
+    "num_hidden" : 3,
+    "widths" : [128, 128, 128, 64],
+    "mixing_embed_dim" : 64,
+    "hypernet_embed" : 128,
+    "max_grad_norm" : 5.0,
+    "update_every" : 1
+}
