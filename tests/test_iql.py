@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-from algorithms.simple_dqn import DQN, Network
+from algorithms.iql import DQN, Network
 
 
 def test_network_width_mismatch_raises():
@@ -26,6 +26,7 @@ def test_act_returns_random_action_when_epsilon_high():
         action_space_size=3,
         eps_init=1.0,
         eps_decay=1.0,
+        eps_min=0.0,
         batch_size=1,
         buffer_size=8,
         num_hidden=2,
@@ -34,7 +35,7 @@ def test_act_returns_random_action_when_epsilon_high():
     state = np.array([0.1, -0.2], dtype=np.float32)
     action = dqn.act(state)
     assert action == 1
-    assert np.array_equal(dqn.last_state, state)
+    assert np.array_equal(dqn.last_state, state.astype(np.float32, copy=False))
     assert dqn.last_action == action
 
 
@@ -47,6 +48,7 @@ def test_learn_updates_epsilon_and_records_loss():
         action_space_size=2,
         eps_init=0.9,
         eps_decay=0.8,
+        eps_min=0.0,
         batch_size=2,
         buffer_size=16,
         num_epochs=1,

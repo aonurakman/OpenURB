@@ -28,6 +28,13 @@ def check_sumo_installed():
             print(f"[DEBUG] SUMO version: {result.stdout.strip()}")
         except subprocess.CalledProcessError as e:
             pytest.skip(f"[SUMO SKIP] Failed to get SUMO version: {e.stderr}", allow_module_level=True)
+    try:
+        from sumolib.miscutils import getFreeSocketPort
+
+        if getFreeSocketPort() is None:
+            pytest.skip("[SUMO SKIP] Local socket ports are not available.", allow_module_level=True)
+    except Exception:
+        pytest.skip("[SUMO SKIP] Local socket ports are not available.", allow_module_level=True)
 
 
 @pytest.mark.parametrize("script_path", python_script)

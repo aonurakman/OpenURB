@@ -2,6 +2,7 @@ import os
 import pytest
 import shutil
 import subprocess
+import sys
 
 from pathlib import Path
 
@@ -10,7 +11,8 @@ from pathlib import Path
 SCRIPTS_DIR = Path("scripts")
 python_script = [SCRIPTS_DIR / "open_iql.py", SCRIPTS_DIR / "cond_open_iql.py"]
 python_script += [SCRIPTS_DIR / "open_ippo.py", SCRIPTS_DIR / "cond_open_ippo.py"]
-python_script += [SCRIPTS_DIR / "open_qmix.py"]
+python_script += [SCRIPTS_DIR / "open_qmix.py", SCRIPTS_DIR / "cond_open_qmix.py"]
+PYTHON = sys.executable
 
 @pytest.fixture(scope="session", autouse=True)
 def check_sumo_installed():
@@ -26,6 +28,13 @@ def check_sumo_installed():
             print(f"[DEBUG] SUMO version: {result.stdout.strip()}")
         except subprocess.CalledProcessError as e:
             pytest.skip(f"[SUMO SKIP] Failed to get SUMO version: {e.stderr}", allow_module_level=True)
+    try:
+        from sumolib.miscutils import getFreeSocketPort
+
+        if getFreeSocketPort() is None:
+            pytest.skip("[SUMO SKIP] Local socket ports are not available.", allow_module_level=True)
+    except Exception:
+        pytest.skip("[SUMO SKIP] Local socket ports are not available.", allow_module_level=True)
 
 
 @pytest.mark.parametrize("script_path", python_script)
@@ -34,7 +43,7 @@ def test_python_script_execution(script_path):
     try:
         script_filename = script_path.name
         result = subprocess.run(
-            ["python", script_filename,
+            [PYTHON, script_filename,
              "--id", f"test_{script_filename}",
              "--alg-conf", "test",
              "--env-conf", "test",
