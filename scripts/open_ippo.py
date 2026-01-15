@@ -27,7 +27,7 @@ from routerl                import TrafficEnvironment
 from routerl                import MachineAgent
 from tqdm                   import tqdm
 
-from algorithms.simple_ppo  import PPO
+from algorithms.ippo import PPO
 from utils                  import clear_SUMO_files
 from utils                  import ensure_recorder_flush
 from utils                  import finish_wandb_run
@@ -38,6 +38,7 @@ from utils                  import generate_exp_id
 from utils                  import run_metrics
 from utils                  import start_runtime_tracking
 from utils                  import finish_runtime_tracking
+from utils                  import save_mean_loss_plot
 
 # Main script to run the IPPO experiment
 if __name__ == "__main__":
@@ -260,7 +261,9 @@ if __name__ == "__main__":
         env.machine_agents[idx].model = PPO(obs_size, env.machine_agents[idx].action_space_size, 
                                             device=device, batch_size=batch_size, lr=lr, num_epochs=num_epochs,
                                             num_hidden=num_hidden, widths=widths, clip_eps=clip_eps,
-                                            normalize_advantage=normalize_advantage, entropy_coef=entropy_coef)
+                                            rnn_hidden_dim=rnn_hidden_dim, gamma=gamma, gae_lambda=gae_lambda,
+                                            normalize_advantage=normalize_advantage, entropy_coef=entropy_coef,
+                                            value_coef=value_coef, max_grad_norm=max_grad_norm, buffer_size=buffer_size)
     agent_lookup = {str(agent.id): agent for agent in env.machine_agents}
     
     ###############################################
@@ -269,6 +272,8 @@ if __name__ == "__main__":
     pbar.set_description("AV learning")
     for episode in range(training_eps + dynamic_episodes):
         env.reset()
+        for agent in env.machine_agents:
+            agent.model.reset_episode()
         for agent_id in env.agent_iter():
             observation, reward, termination, truncation, info = env.last()
             
@@ -317,7 +322,9 @@ if __name__ == "__main__":
                         new_av.model = PPO(obs_size, env.machine_agents[idx].action_space_size, 
                                             device=device, batch_size=batch_size, lr=lr, num_epochs=num_epochs,
                                             num_hidden=num_hidden, widths=widths, clip_eps=clip_eps,
-                                            normalize_advantage=normalize_advantage, entropy_coef=entropy_coef)
+                                            rnn_hidden_dim=rnn_hidden_dim, gamma=gamma, gae_lambda=gae_lambda,
+                                            normalize_advantage=normalize_advantage, entropy_coef=entropy_coef,
+                                            value_coef=value_coef, max_grad_norm=max_grad_norm, buffer_size=buffer_size)
                     
                     env.machine_agents.append(new_av)
                     agent_lookup[str(new_av.id)] = new_av
@@ -370,6 +377,8 @@ if __name__ == "__main__":
     pbar.set_description("Testing")
     for episode in range(test_eps):
         env.reset()
+        for agent in env.machine_agents:
+            agent.model.reset_episode()
         for agent_id in env.agent_iter():
             observation, reward, termination, truncation, info = env.last()
             if termination or truncation:
@@ -388,6 +397,7 @@ if __name__ == "__main__":
     env.plot_results()
     losses_pd = pd.DataFrame([{"id": agent.id, "losses": agent.model.loss} for agent in env.machine_agents])
     losses_pd.to_csv(os.path.join(records_folder, "losses.csv"), index=False)
+    save_mean_loss_plot(records_folder, {row["id"]: row["losses"] for row in losses_pd.to_dict("records")})
     env.stop_simulation()
     clear_SUMO_files(os.path.join(records_folder, "SUMO_output"), episodes_folder, remove_additional_files=True)
     finish_runtime_tracking(runtime_tracker)

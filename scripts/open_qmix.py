@@ -27,7 +27,7 @@ from routerl                import TrafficEnvironment
 from routerl                import MachineAgent
 from tqdm                   import tqdm
 
-from algorithms.simple_qmix import QMIX
+from algorithms.qmix import QMIX
 from utils                  import clear_SUMO_files
 from utils                  import ensure_recorder_flush
 from utils                  import finish_wandb_run
@@ -38,6 +38,7 @@ from utils                  import generate_exp_id
 from utils                  import run_metrics
 from utils                  import start_runtime_tracking
 from utils                  import finish_runtime_tracking
+from utils                  import save_mean_loss_plot
 
 
 def extract_action_mask(observation, info, action_space_size):
@@ -353,10 +354,18 @@ if __name__ == "__main__":
         num_epochs=num_epochs,
         num_hidden=num_hidden,
         widths=widths,
+        rnn_hidden_dim=rnn_hidden_dim,
         mixing_embed_dim=mixing_embed_dim,
         hypernet_embed=hypernet_embed,
         max_grad_norm=max_grad_norm,
+        gamma=gamma,
+        target_update_every=target_update_every,
+        double_q=double_q,
+        tau=tau,
         share_parameters=share_parameters,
+        mixing_weight_clip=mixing_weight_clip,
+        q_tot_clip=q_tot_clip,
+        use_huber_loss=use_huber_loss,
     )
     for agent in env.machine_agents:
         # Parameter sharing: each AV points to the same learner.
@@ -378,6 +387,7 @@ if __name__ == "__main__":
     pbar.set_description("AV learning")
     for episode in range(training_eps + dynamic_episodes):
         env.reset()
+        qmix.reset_episode()
         # Active mask: which agents are AVs *today* (not "whose turn it is").
         active_mask = np.zeros(len(agent_id_list), dtype=np.float32)
         for agent_id in env.possible_agents:
@@ -515,6 +525,7 @@ if __name__ == "__main__":
     pbar.set_description("Testing")
     for episode in range(test_eps):
         env.reset()
+        qmix.reset_episode()
         for agent_id in env.agent_iter():
             observation, reward, termination, truncation, info = env.last()
             obs, action_mask = extract_action_mask(observation, info, action_space_size)
@@ -539,6 +550,7 @@ if __name__ == "__main__":
     env.plot_results()
     losses_pd = pd.DataFrame([{"id": "qmix", "losses": qmix.loss}])
     losses_pd.to_csv(os.path.join(records_folder, "losses.csv"), index=False)
+    save_mean_loss_plot(records_folder, {row["id"]: row["losses"] for row in losses_pd.to_dict("records")})
     env.stop_simulation()
     clear_SUMO_files(os.path.join(records_folder, "SUMO_output"), episodes_folder, remove_additional_files=True)
     finish_runtime_tracking(runtime_tracker)

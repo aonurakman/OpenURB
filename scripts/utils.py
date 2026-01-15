@@ -21,6 +21,40 @@ except ImportError:
     wandb = None
 
 
+def _apply_sysconf_permission_workaround() -> None:
+    """Work around sandboxed macOS environments where os.sysconf is restricted.
+
+    Some runners (e.g. ProcessPoolExecutor) call os.sysconf("SC_SEM_NSEMS_MAX") during init.
+    In certain sandboxed environments this query raises PermissionError, which breaks scripts
+    even though semaphores/processes are otherwise usable.
+    """
+
+    if not hasattr(os, "sysconf"):
+        return
+    try:
+        os.sysconf("SC_SEM_NSEMS_MAX")
+        return
+    except PermissionError:
+        pass
+    except Exception:
+        return
+
+    original_sysconf = os.sysconf
+
+    def safe_sysconf(name):
+        try:
+            return original_sysconf(name)
+        except PermissionError:
+            if name == "SC_SEM_NSEMS_MAX":
+                return -1
+            raise
+
+    os.sysconf = safe_sysconf
+
+
+_apply_sysconf_permission_workaround()
+
+
 @dataclass
 class RuntimeTracker:
     records_folder: str
@@ -276,6 +310,50 @@ def run_metrics(exp_id: str, repo_root: str, verbose: bool = False) -> None:
         print(f"Warning: metrics generation failed for {exp_id} (exit code {result.returncode}).")
         if not had_metrics and os.path.exists(metrics_path):
             shutil.rmtree(metrics_path, ignore_errors=True)
+
+
+def save_mean_loss_plot(records_folder: str, losses_by_id: Dict[str, list], filename: str = "mean_loss.png") -> Optional[str]:
+    """Save a mean loss curve to `results/<exp_id>/plots/`.
+
+    `losses_by_id` is expected to map an identifier (agent id or algorithm name) to a list of loss values
+    produced during training.
+    """
+
+    series = []
+    for losses in losses_by_id.values():
+        if losses:
+            series.append([float(x) for x in losses])
+    if not series:
+        return None
+
+    max_len = max(len(s) for s in series)
+    import numpy as np
+
+    arr = np.full((len(series), max_len), np.nan, dtype=np.float32)
+    for i, s in enumerate(series):
+        arr[i, : len(s)] = np.asarray(s, dtype=np.float32)
+    mean = np.nanmean(arr, axis=0)
+
+    plots_dir = os.path.join(records_folder, "plots")
+    os.makedirs(plots_dir, exist_ok=True)
+    out_path = os.path.join(plots_dir, filename)
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(mean, label="mean loss")
+    ax.set_title("Mean training loss")
+    ax.set_xlabel("Update step")
+    ax.set_ylabel("Loss")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
 
 def get_episodes(ep_path: str) -> list[int]:
     """Get the episodes data
