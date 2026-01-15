@@ -41,7 +41,7 @@ python analysis/metrics.py --all --no-skip --jobs 4
 ---
 
 The core metric is the travel time $t$, which is both the core term of the utility for human drivers (rational utility maximizers) and of the CAVs reward.
-We report the average travel time for the system $\hat{t}$, human drivers $\hat{t}\_{HDV}$, and autonomous vehicles $\hat{t}\_{CAV}$. We record each during training, dynamic switching, and testing, plus a 50-day pre-mutation baseline ($\hat{t}^{train}, \hat{t}^{dyn}, \hat{t}^{test}, \hat{t}^{pre}$), with start/end windows for training and dynamic phases.
+We report the average travel time for the system $\hat{t}$, human drivers $\hat{t}_{HDV}$, and autonomous vehicles $\hat{t}_{CAV}$. We record each during training, dynamic switching, and testing, plus a 50-day pre-mutation baseline ($\hat{t}^{train}, \hat{t}^{dyn}, \hat{t}^{test}, \hat{t}^{pre}$), with start/end windows for training and dynamic phases.
 
 From these, we introduce:
 
@@ -57,7 +57,7 @@ To understand causes of travel time shifts, we track _Average speed_ and _Averag
 - _Dynamic instability_: per-episode action-change rates for HDVs/CAVs.
 - _Dynamic time excess_: average per-episode sum of time lost during switching.
 
-We measure the _Cost of training_, expressed as the average of $\sum_{\tau \in train}(t^\tau_a - \hat{t}^{pre}_a)$ over all agents $a$, i.e. the cumulated disturbance CAVs cause during training. We define $c\_{CAV}$ and $c\_{HDV}$ accordingly. We call an experiment _won_ by CAVs if their policy was on average faster than human drivers' behaviour. A final _winrate_ is the share of training episodes where CAVs are faster.
+We measure the _Cost of training_, expressed as the average of $\sum_{\tau \in train}(t^\tau_a - \hat{t}^{pre}_a)$ over all agents $a$, i.e. the cumulated disturbance CAVs cause during training. We define $c_{CAV}$ and $c_{HDV}$ accordingly. We call an experiment _won_ by CAVs if their policy was on average faster than human drivers' behaviour. A final _winrate_ is the share of training episodes where CAVs are faster.
 
 Finally, we report switch statistics from `shifts.csv` (when available): total switches by direction, switches per event/agent, unique switch churn, and machine-ratio summary (start/end/avg/min/max/std).
 

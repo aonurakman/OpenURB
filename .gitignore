@@ -207,3 +207,9 @@ wandb_config.json
 
 # Local copy of leaderboard
 leaderboard_site/
+
+# external_tasks outputs
+external_tasks/runs/
+external_tasks/.mplconfig/
+
+servers/

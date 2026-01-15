@@ -90,7 +90,7 @@ python scripts/<script_name>.py [--id <exp_id>] --alg-conf <hyperparam_id> --env
 
 where
 
-- ```<script_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, ```cond_open_ippo```, and ```open_qmix```,
+- ```<script_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, ```cond_open_ippo```, ```open_qmix```, and ```cond_open_qmix```,
 - ```<exp_id>``` is an optional experiment identifier, for instance ```random_ing```,
 - ```<hyperparam_id>``` is the hyperparameterization identifier, it must correspond to a `.json` filename (without extension) in [`config/algo_config`](config/algo_config/). Provided scripts automatically select the algorithm-specific subfolder in this directory.
 - ```<env_conf_id>``` is the environment configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/env_config`](config/env_config/). It is used to parameterize environment-specific processes, such as path generation, disk operations, etc. It is **optional** and by default is set to `config1`.
@@ -149,6 +149,7 @@ We provide training scripts for open vs. conditional switching variants:
 - `open_iql.py` runs an IQL setup with open switching.
 - `cond_open_iql.py` is the conditional-switching version of the IQL setup.
 - `open_qmix.py` runs a QMIX setup with open switching.
+- `cond_open_qmix.py` is the QMIX variant with switching conditioned on group travel times.
 
 Baseline scripts are `open_baselines.py` and `cond_open_baselines.py` (see `baseline_models/readme.md`
 for available models). The open variants run dynamic switching (conditional in the `cond_` version)
@@ -182,6 +183,42 @@ python scripts/open_iql.py [--id <exp_id>] --alg-conf <hyperparam_id> --task-con
 ```
 
 Use `--no-wandb` to disable logging while keeping the original disk outputs. If `--id` is omitted, scripts auto-generate one and print it before starting.
+
+## external_tasks (sanity checks)
+
+These scripts are **not unit tests**. They run short MARL training loops to sanity-check that the
+algorithms in `algorithms/` can learn on small **multi-step** environments.
+
+Outputs are written under `external_tasks/runs/<env>/<algo>/<timestamp>/`:
+- `learning_curves.png`
+- `episode_rewards.npy`, `episode_losses.npy`, `eval_rewards.npy`
+- `best_checkpoint.pt` (best eval reward)
+- `policy_rollout.gif` (rollout of the best checkpoint; always headless)
+
+### Environments
+
+- `simple_spread_v3` (PettingZoo MPE): `external_tasks/simple_spread/`
+- `coop_line_world` (tiny built-in toy env): `external_tasks/toy_env/`
+
+### Dependencies (for PettingZoo)
+
+```bash
+pip install "pettingzoo[mpe]" pygame pillow
+```
+
+### Run
+
+```bash
+python external_tasks/simple_spread/random_policy.py
+python external_tasks/simple_spread/iql.py
+python external_tasks/simple_spread/ippo.py
+python external_tasks/simple_spread/qmix.py
+
+python external_tasks/toy_env/random_policy.py
+python external_tasks/toy_env/iql.py
+python external_tasks/toy_env/ippo.py
+python external_tasks/toy_env/qmix.py
+```
 
 ## Baseline models
 
@@ -283,7 +320,7 @@ python analysis/metrics.py --all --no-skip --jobs 4
 ---
 
 The core metric is the travel time $t$, which is both the core term of the utility for human drivers (rational utility maximizers) and of the CAVs reward.
-We report the average travel time for the system $\hat{t}$, human drivers $\hat{t}\_{HDV}$, and autonomous vehicles $\hat{t}\_{CAV}$. We record each during training, dynamic switching, and testing, plus a 50-day pre-mutation baseline ($\hat{t}^{train}, \hat{t}^{dyn}, \hat{t}^{test}, \hat{t}^{pre}$), with start/end windows for training and dynamic phases.
+We report the average travel time for the system $\hat{t}$, human drivers $\hat{t}_{HDV}$, and autonomous vehicles $\hat{t}_{CAV}$. We record each during training, dynamic switching, and testing, plus a 50-day pre-mutation baseline ($\hat{t}^{train}, \hat{t}^{dyn}, \hat{t}^{test}, \hat{t}^{pre}$), with start/end windows for training and dynamic phases.
 
 From these, we introduce:
 
@@ -299,7 +336,7 @@ To understand causes of travel time shifts, we track _Average speed_ and _Averag
 - _Dynamic instability_: per-episode action-change rates for HDVs/CAVs.
 - _Dynamic time excess_: average per-episode sum of time lost during switching.
 
-We measure the _Cost of training_, expressed as the average of $\sum_{\tau \in train}(t^\tau_a - \hat{t}^{pre}_a)$ over all agents $a$, i.e. the cumulated disturbance CAVs cause during training. We define $c\_{CAV}$ and $c\_{HDV}$ accordingly. We call an experiment _won_ by CAVs if their policy was on average faster than human drivers' behaviour. A final _winrate_ is the share of training episodes where CAVs are faster.
+We measure the _Cost of training_, expressed as the average of $\sum_{\tau \in train}(t^\tau_a - \hat{t}^{pre}_a)$ over all agents $a$, i.e. the cumulated disturbance CAVs cause during training. We define $c_{CAV}$ and $c_{HDV}$ accordingly. We call an experiment _won_ by CAVs if their policy was on average faster than human drivers' behaviour. A final _winrate_ is the share of training episodes where CAVs are faster.
 
 Finally, we report switch statistics from `shifts.csv` (when available): total switches by direction, switches per event/agent, unique switch churn, and machine-ratio summary (start/end/avg/min/max/std).
 
