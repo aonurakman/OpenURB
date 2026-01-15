@@ -1,0 +1,22 @@
+{
+    "experiment": {
+        "id": "qmix_ins_a1_e1_t1_42_42",
+        "script": "open_qmix.py",
+        "alg_config": "config1",
+        "task_config": "dynamic1",
+        "env_config": "config1"
+    },
+    "timing": {
+        "start_local": "2026-01-09 10:21:46 CET",
+        "end_local": "2026-01-09 14:22:01 CET",
+        "duration": "04:00:15.503"
+    },
+    "resources": {
+        "cpu_user_sec": 4860.796,
+        "cpu_system_sec": 2099.232,
+        "voluntary_context_switches": 370340098,
+        "involuntary_context_switches": 58092969,
+        "peak_memory_mb": 558.281,
+        "records_folder_size_mb": 112.557
+    }
+}

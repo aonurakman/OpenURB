@@ -5,12 +5,12 @@
 
     <input>
         <net-file value="../networks/saint_arnoult/saint_arnoult.net.xml"/>
-        <additional-files value="../results/sample_results/det.add.xml,../results/sample_results/route.rou.xml"/>
+        <additional-files value="../results/iql_sai_atest_etest_tdynamic_test_42_42/det.add.xml,../results/iql_sai_atest_etest_tdynamic_test_42_42/route.rou.xml"/>
     </input>
 
     <output>
-        <tripinfo-output value="../results/sample_results/SUMO_output/detailed_sumo_stats_46.xml"/>
-        <statistic-output value="../results/sample_results/SUMO_output/sumo_stats_46.xml"/>
+        <tripinfo-output value="../results/iql_sai_atest_etest_tdynamic_test_42_42/SUMO_output/detailed_sumo_stats_46.xml"/>
+        <statistic-output value="../results/iql_sai_atest_etest_tdynamic_test_42_42/SUMO_output/sumo_stats_46.xml"/>
     </output>
 
     <processing>

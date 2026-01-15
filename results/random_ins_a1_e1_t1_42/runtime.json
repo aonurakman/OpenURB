@@ -1,0 +1,22 @@
+{
+    "experiment": {
+        "id": "random_ins_a1_e1_t1_42",
+        "script": "open_baselines.py",
+        "alg_config": "config1",
+        "task_config": "dynamic1",
+        "env_config": "config1"
+    },
+    "timing": {
+        "start_local": "2026-01-08 09:36:52 CET",
+        "end_local": "2026-01-08 12:01:18 CET",
+        "duration": "02:24:25.873"
+    },
+    "resources": {
+        "cpu_user_sec": 2951.195,
+        "cpu_system_sec": 1348.89,
+        "voluntary_context_switches": 238252857,
+        "involuntary_context_switches": 65178600,
+        "peak_memory_mb": 210.328,
+        "records_folder_size_mb": 76.146
+    }
+}
