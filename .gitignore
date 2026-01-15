@@ -181,7 +181,6 @@ episodes/
 SUMO_output/
 agents.csv
 det.add.xml
-losses.csv
 route.rou.xml
 routes.csv
 combined_data.csv
@@ -209,7 +208,8 @@ wandb_config.json
 leaderboard_site/
 
 # external_tasks outputs
-external_tasks/runs/
 external_tasks/.mplconfig/
+*.pt
+*.npy
 
 servers/
