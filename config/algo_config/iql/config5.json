@@ -9,5 +9,12 @@
     "num_epochs" : 2,
     "num_hidden" : 2,
     "widths" : [32, 64, 32],
-    "update_every" : 1
+    "update_every" : 1,
+
+    "eps_min" : 0.05,
+    "gamma" : 0.99,
+    "target_update_every" : 100,
+    "double_dqn" : true,
+    "tau" : 1.0,
+    "max_grad_norm" : 10.0
 }

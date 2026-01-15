@@ -14,5 +14,14 @@
     "mixing_embed_dim" : 64,
     "hypernet_embed" : 128,
     "max_grad_norm" : 5.0,
-    "update_every" : 1
+    "update_every" : 1,
+
+    "gamma" : 0.99,
+    "target_update_every" : 200,
+    "double_q" : true,
+    "tau" : 1.0,
+    "rnn_hidden_dim" : 64,
+    "mixing_weight_clip" : null,
+    "q_tot_clip" : null,
+    "use_huber_loss" : true
 }
