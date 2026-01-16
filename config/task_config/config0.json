@@ -1,0 +1,26 @@
+{
+    "desc" : 
+    [
+        "20% AVs, 80% humans.",
+        "200 days of human learning",
+        "100 test episodes",
+        "Humans adapt during AV learning",
+        "AVs are selfish",
+        "Human model is gawron",
+        "Gawron parameters are default values in RouteRL",
+        "NO SWITCH happens in dynamic_eps",
+        "1000 episodes of dynamic exchanges among groups"
+    ],
+
+    "ratio_machines" : 0.2,
+    "human_learning_episodes" : 200,
+    "test_eps" : 100,
+    "should_humans_adapt": true,
+    "av_behavior" : "selfish",
+    "human_model" : "gawron",
+
+    "dynamic_episodes" : 1000,
+    "switch_interval" : 10,
+    "switch_prob_humans" : -1,
+    "switch_prob_machines" : -1
+}

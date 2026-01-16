@@ -1,21 +1,21 @@
 {
-    "training_eps" : 1000,
+    "training_eps" : 3000,
 
-    "eps_init" : 0.99,
-    "eps_decay" : 0.998,
-    "buffer_size" : 256,
-    "batch_size" : 16,
+    "temp_init" : 0.99,
+    "temp_decay" : 0.998,
+    "buffer_size" : 512,
+    "batch_size" : 32,
     "lr" : 0.003,
     "num_epochs" : 1,
     "num_hidden" : 2,
     "widths" : [32, 64, 32],
     "update_every" : 1,
 
-    "eps_min" : 0.05,
+    "temp_min" : 0.05,
     "rnn_hidden_dim" : 0,
     "seq_len" : 8,
     "gamma" : 0.99,
-    "target_update_every" : 100,
+    "target_update_every" : 200,
     "double_dqn" : true,
     "tau" : 1.0,
     "max_grad_norm" : 10.0

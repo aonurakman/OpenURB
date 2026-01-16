@@ -5,9 +5,9 @@ and `algorithms/qmix.py`.
 
 - `training_eps`: number of training episodes in the AV learning phase.
 - `share_parameters`: whether to share a single agent Q-network across all agents.
-- `eps_init`: initial epsilon for epsilon-greedy action selection.
-- `eps_decay`: multiplicative epsilon decay applied after each learning step.
-- `eps_min`: lower bound for epsilon during decay.
+- `temp_init`: initial temperature for Boltzmann (softmax) action selection.
+- `temp_decay`: multiplicative temperature decay applied after each learning step.
+- `temp_min`: lower bound for temperature during decay (0 = greedy).
 - `buffer_size`: replay buffer capacity (episodes; single-step is stored as length-1).
 - `batch_size`: number of joint transitions sampled per update.
 - `lr`: Adam learning rate for the agent and mixing networks.

@@ -4,9 +4,9 @@ All configs in this folder share the same keys and are consumed by `scripts/open
 and `algorithms/iql.py`.
 
 - `training_eps`: number of training episodes in the AV learning phase.
-- `eps_init`: initial epsilon for epsilon-greedy action selection.
-- `eps_decay`: multiplicative epsilon decay applied after each learning step.
-- `eps_min`: lower bound for epsilon during decay.
+- `temp_init`: initial temperature for Boltzmann (softmax) action selection.
+- `temp_decay`: multiplicative temperature decay applied after each learning step.
+- `temp_min`: lower bound for temperature during decay (0 = greedy).
 - `buffer_size`: replay buffer capacity.
 - `batch_size`: number of transitions sampled per DQN update.
 - `lr`: Adam learning rate for the Q-network.

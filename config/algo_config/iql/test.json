@@ -1,8 +1,8 @@
 {
     "training_eps" : 10,
 
-    "eps_init" : 0.2,
-    "eps_decay" : 0.9999,
+    "temp_init" : 0.2,
+    "temp_decay" : 0.9999,
     "buffer_size" : 256,
     "batch_size" : 3,
     "lr" : 0.01,
@@ -11,7 +11,7 @@
     "widths" : [32, 32],
     "update_every" : 1,
 
-    "eps_min" : 0.0,
+    "temp_min" : 0.0,
     "rnn_hidden_dim" : 0,
     "seq_len" : 8,
     "gamma" : 0.99,
