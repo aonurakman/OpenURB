@@ -1,22 +1,22 @@
 {
     "experiment": {
-        "id": "ippo_ins_a1_e1_t1_42_42",
+        "id": "ippo_ins_a1_e1_t1_42_42_repeated",
         "script": "open_ippo.py",
         "alg_config": "config1",
         "task_config": "dynamic1",
         "env_config": "config1"
     },
     "timing": {
-        "start_local": "2026-01-07 16:05:38 CET",
-        "end_local": "2026-01-07 22:39:04 CET",
-        "duration": "06:33:25.925"
+        "start_local": "2026-01-16 13:12:32 CET",
+        "end_local": "2026-01-16 16:49:17 CET",
+        "duration": "03:36:44.765"
     },
     "resources": {
-        "cpu_user_sec": 4489.354,
-        "cpu_system_sec": 1989.189,
-        "voluntary_context_switches": 348610410,
-        "involuntary_context_switches": 48101151,
-        "peak_memory_mb": 399.344,
-        "records_folder_size_mb": 112.931
+        "cpu_user_sec": 4722.299,
+        "cpu_system_sec": 1852.313,
+        "voluntary_context_switches": 345075451,
+        "involuntary_context_switches": 43570632,
+        "peak_memory_mb": 525.922,
+        "records_folder_size_mb": 112.973
     }
 }

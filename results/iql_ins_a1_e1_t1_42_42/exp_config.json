@@ -13,6 +13,14 @@
         32
     ],
     "update_every": 1,
+    "eps_min": 0.05,
+    "rnn_hidden_dim": 0,
+    "seq_len": 8,
+    "gamma": 0.99,
+    "target_update_every": 100,
+    "double_dqn": true,
+    "tau": 1.0,
+    "max_grad_norm": 10.0,
     "smooth_by": 10,
     "plot_choices": "basic",
     "save_every": 5,
@@ -54,5 +62,5 @@
         "Dynamic switches",
         "Testing phase"
     ],
-    "command": "./scripts/open_iql.py --net ing_small --task-conf dynamic1 --env-conf config1 --id iql_ins_a1_e1_t1_42_42 --alg-conf config1 --env-seed 42 --torch-seed 42"
+    "command": "/Users/akman/OpenURB/scripts/open_iql.py --id iql_ins_a1_e1_t1_42_42_repeated --net ing_small --task-conf dynamic1 --env-conf config1 --alg-conf config1 --env-seed 42 --torch-seed 42"
 }

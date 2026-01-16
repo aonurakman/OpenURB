@@ -36,7 +36,7 @@
     "env_seed": 42,
     "torch_seed": 42,
     "env_config": "test",
-    "task_config": "dynamic_test",
+    "task_config": "test",
     "alg_config": "test",
     "algorithm": "iql",
     "num_agents": 222,
@@ -53,5 +53,5 @@
         "Dynamic switches",
         "Testing phase"
     ],
-    "command": "scripts/open_iql.py --net saint_arnoult --id sample_results --alg-conf test --env-conf test --task-conf dynamic_test --env-seed 42 --torch-seed 42"
+    "command": "scripts/open_iql.py --net saint_arnoult --id sample_results --alg-conf test --env-conf test --task-conf test --env-seed 42 --torch-seed 42"
 }

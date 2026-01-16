@@ -13,6 +13,12 @@
     "clip_eps": 0.2,
     "normalize_advantage": true,
     "entropy_coef": 0.05,
+    "value_coef": 0.5,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "rnn_hidden_dim": 64,
+    "max_grad_norm": 1.0,
+    "buffer_size": 2048,
     "smooth_by": 10,
     "plot_choices": "basic",
     "save_every": 5,
@@ -54,5 +60,5 @@
         "Dynamic switches",
         "Testing phase"
     ],
-    "command": "scripts/cond_open_ippo.py --id c_ippo_ins_a2_e1_t1_42_42 --net ing_small --alg-conf config2 --task-conf dynamic1 --env-conf config1 --torch-seed 42 --env-seed 42"
+    "command": "/Users/akman/OpenURB/scripts/cond_open_ippo.py --id c_ippo_ins_a2_e1_t1_42_42_repeated --net ing_small --alg-conf config2 --task-conf dynamic1 --env-conf config1 --env-seed 42 --torch-seed 42"
 }
