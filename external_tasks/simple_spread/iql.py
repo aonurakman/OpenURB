@@ -83,6 +83,8 @@ def main():
         returns = []
         for k in range(eval_episodes):
             obs, _ = env.reset(seed=start_seed + k)
+            for aid in agent_ids:
+                models[aid].reset_episode()
             term = {aid: False for aid in agent_ids}
             trunc = {aid: False for aid in agent_ids}
             total = 0.0
@@ -111,6 +113,8 @@ def main():
 
     for ep in range(episodes):
         obs, _ = env.reset(seed=seed + ep)
+        for aid in agent_ids:
+            models[aid].reset_episode()
         term = {aid: False for aid in agent_ids}
         trunc = {aid: False for aid in agent_ids}
 
@@ -209,6 +213,8 @@ def main():
     step_idx = 0
     for ep in range(5):
         obs, _ = env_viz.reset(seed=seed + 200_000 + ep)
+        for aid in agent_ids:
+            models[aid].reset_episode()
         term = {aid: False for aid in agent_ids}
         trunc = {aid: False for aid in agent_ids}
         while True:

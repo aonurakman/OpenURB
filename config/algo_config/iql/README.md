@@ -14,6 +14,8 @@ and `algorithms/iql.py`.
 - `num_hidden`: number of hidden layers in the Q-network.
 - `widths`: layer widths; length must be `num_hidden + 1`.
 - `update_every`: run learning every N episodes.
+- `rnn_hidden_dim`: GRU hidden size for the recurrent Q-network (set to `0` to use `widths[-1]`).
+- `seq_len`: sequence length for recurrent replay updates.
 - `gamma`: discount factor for TD targets.
 - `target_update_every`: number of learner updates between target-network updates.
 - `double_dqn`: whether to use Double DQN targets.

@@ -12,6 +12,8 @@
     "update_every" : 1,
 
     "eps_min" : 0.05,
+    "rnn_hidden_dim" : 0,
+    "seq_len" : 8,
     "gamma" : 0.99,
     "target_update_every" : 100,
     "double_dqn" : true,

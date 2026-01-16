@@ -9,13 +9,13 @@ import numpy as np
 import pytest
 import torch
 
-from algorithms.iql import DQN, Network
+from algorithms.iql import DQN, RecurrentNetwork
 
 
 def test_network_width_mismatch_raises():
     """Ensure misconfigured width sequences are rejected."""
     with pytest.raises(AssertionError):
-        Network(in_size=3, out_size=2, num_hidden=1, widths=(8, 8, 4))
+        RecurrentNetwork(in_size=3, out_size=2, num_hidden=1, widths=(8, 8, 4), rnn_hidden_dim=8)
 
 
 def test_act_returns_random_action_when_epsilon_high():
@@ -60,6 +60,8 @@ def test_learn_updates_epsilon_and_records_loss():
         for layer in layers:
             layer.weight.zero_()
             layer.bias.zero_()
+        for param in dqn.q_network.rnn.parameters():
+            param.zero_()
         dqn.q_network.out_layer.weight.zero_()
         dqn.q_network.out_layer.bias[:] = torch.tensor([0.0, 0.5])
 
@@ -99,3 +101,16 @@ def test_learn_returns_early_when_memory_small():
     dqn.learn()
     assert dqn.loss == []
     assert dqn.epsilon == epsilon_before
+
+
+def test_loss_fn_is_unreduced_for_padding_mask():
+    """The TD loss must be unreduced so padded timesteps can be masked out."""
+    dqn = DQN(
+        state_size=2,
+        action_space_size=2,
+        batch_size=2,
+        buffer_size=8,
+        num_hidden=1,
+        widths=(8, 8),
+    )
+    assert getattr(dqn.loss_fn, "reduction", None) == "none"
