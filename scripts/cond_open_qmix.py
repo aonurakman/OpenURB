@@ -481,9 +481,10 @@ if __name__ == "__main__":
             if (len(human_tts) > 0) and (len(av_tts) > 0):
                 tt_ratio = float(np.mean(human_tts) / np.mean(av_tts))
             tt_ratio_denom = max(tt_ratio, 1e-6)
+            cond_switch_prob_humans = min(1.0, max(0.0, switch_prob_humans * float(tt_ratio)))
+            cond_switch_prob_machines = min(1.0, max(0.0, switch_prob_machines / float(tt_ratio_denom)))
             
             for human in env.human_agents[:]:
-                cond_switch_prob_humans = switch_prob_humans * tt_ratio
                 if random.random() <= cond_switch_prob_humans:
                     # Convert a human to an AV (reuse prior AV state if available).
                     env.human_agents.remove(human)
@@ -503,7 +504,6 @@ if __name__ == "__main__":
                     shifted_humans.append(str(human.id))
                       
             for machine in env.machine_agents[:]:
-                cond_switch_prob_machines = switch_prob_machines / tt_ratio_denom
                 if (str(machine.id) not in shifted_humans) and (random.random() <= cond_switch_prob_machines):
                     # Convert an AV back to a human and remove from the AV pool.
                     env.machine_agents.remove(machine)

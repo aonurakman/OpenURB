@@ -262,6 +262,8 @@ if __name__ == "__main__":
                                             device=device, eps_init=eps_init, eps_decay=eps_decay,
                                             eps_min=eps_min, buffer_size=buffer_size, batch_size=batch_size, lr=lr,
                                             num_epochs=num_epochs, num_hidden=num_hidden, widths=widths,
+                                            rnn_hidden_dim=globals().get("rnn_hidden_dim", 0),
+                                            seq_len=globals().get("seq_len", 8),
                                             gamma=gamma, target_update_every=target_update_every,
                                             double_dqn=double_dqn, tau=tau, max_grad_norm=max_grad_norm)
     agent_lookup = {str(agent.id): agent for agent in env.machine_agents}
@@ -272,6 +274,8 @@ if __name__ == "__main__":
     pbar.set_description("AV learning")
     for episode in range(training_eps + dynamic_episodes):
         env.reset()
+        for agent in env.machine_agents:
+            agent.model.reset_episode()
         for agent_id in env.agent_iter():
             observation, reward, termination, truncation, info = env.last()
             
@@ -306,38 +310,57 @@ if __name__ == "__main__":
             
             known_machines = set(machine_agents_copy.keys())
             
-            for human in env.human_agents:
+            for human in env.human_agents[:]:
                 if random.random() <= switch_prob_humans:
                     env.human_agents.remove(human)
                     env.all_agents.remove(human)
                     
-                    if human.id in known_machines:
-                        new_av = copy.deepcopy(machine_agents_copy[human.id])
+                    human_id = str(human.id)
+                    if human_id in known_machines:
+                        new_av = copy.deepcopy(machine_agents_copy[human_id])
                     else:
                         new_av = MachineAgent(human.id, human.start_time,
                                             human.origin, human.destination,
                                             env.agent_params[kc.MACHINE_PARAMETERS], env.action_space_size)
-                        new_av.model = DQN(obs_size, env.machine_agents[idx].action_space_size,
-                                        device=device, eps_init=eps_init, eps_decay=eps_decay,
-                                        eps_min=eps_min, buffer_size=buffer_size, batch_size=batch_size, lr=lr,
-                                        num_epochs=num_epochs, num_hidden=num_hidden, widths=widths,
-                                        gamma=gamma, target_update_every=target_update_every,
-                                        double_dqn=double_dqn, tau=tau, max_grad_norm=max_grad_norm)
+                        new_av.model = DQN(
+                            obs_size,
+                            env.action_space_size,
+                            device=device,
+                            eps_init=eps_init,
+                            eps_decay=eps_decay,
+                            eps_min=eps_min,
+                            buffer_size=buffer_size,
+                            batch_size=batch_size,
+                            lr=lr,
+                            num_epochs=num_epochs,
+                            num_hidden=num_hidden,
+                            widths=widths,
+                            rnn_hidden_dim=globals().get("rnn_hidden_dim", 0),
+                            seq_len=globals().get("seq_len", 8),
+                            gamma=gamma,
+                            target_update_every=target_update_every,
+                            double_dqn=double_dqn,
+                            tau=tau,
+                            max_grad_norm=max_grad_norm,
+                        )
                     
                     env.machine_agents.append(new_av)
-                    agent_lookup[str(new_av.id)] = new_av
-                    shifted_humans.append(str(human.id))
+                    agent_lookup[human_id] = new_av
+                    machine_agents_copy[human_id] = copy.deepcopy(new_av)
+                    shifted_humans.append(human_id)
                       
-            for machine in env.machine_agents:
-                if (machine.id not in shifted_humans) and (random.random() <= switch_prob_machines):
+            for machine in env.machine_agents[:]:
+                machine_id = str(machine.id)
+                if (machine_id not in shifted_humans) and (random.random() <= switch_prob_machines):
                     env.machine_agents.remove(machine)
                     env.all_agents.remove(machine)
+                    machine_agents_copy[machine_id] = copy.deepcopy(machine)
                     
-                    new_human = copy.deepcopy(human_agents_copy[str(machine.id)])
+                    new_human = copy.deepcopy(human_agents_copy[machine_id])
                     env.human_agents.append(new_human)
                     
-                    del agent_lookup[str(machine.id)]
-                    shifted_avs.append(str(machine.id))
+                    agent_lookup.pop(machine_id, None)
+                    shifted_avs.append(machine_id)
              
             env.all_agents = env.machine_agents + env.human_agents       
             env._initialize_machine_agents()
@@ -375,6 +398,8 @@ if __name__ == "__main__":
     pbar.set_description("Testing")
     for episode in range(test_eps):
         env.reset()
+        for agent in env.machine_agents:
+            agent.model.reset_episode()
         for agent_id in env.agent_iter():
             observation, reward, termination, truncation, info = env.last()
             if termination or truncation:

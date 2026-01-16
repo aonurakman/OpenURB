@@ -323,19 +323,19 @@ if __name__ == "__main__":
             
             known_machines = set(machine_agents_copy.keys())
             
-            for human in env.human_agents:
+            for human in env.human_agents[:]:
                 if random.random() <= switch_prob_humans:
                     env.human_agents.remove(human)
                     env.all_agents.remove(human)
                     
-                    if human.id in known_machines:
-                        new_av = copy.deepcopy(machine_agents_copy[human.id])
+                    human_id = str(human.id)
+                    if human_id in known_machines:
+                        new_av = copy.deepcopy(machine_agents_copy[human_id])
                     else:
                         new_av = MachineAgent(human.id, human.start_time,
                                             human.origin, human.destination,
                                             env.agent_params[kc.MACHINE_PARAMETERS], env.action_space_size)
                     
-                    human_id = str(human.id)
                     if human_id not in mutated_humans:
                         baseline_human = copy.deepcopy(human_agents_copy[human_id])
                         initial_knowledge = free_flows[(human.origin, human.destination)]
@@ -345,17 +345,20 @@ if __name__ == "__main__":
                     
                     new_av.model = mutated_humans[human_id].model
                     env.machine_agents.append(new_av)
-                    shifted_humans.append(str(human.id))
+                    machine_agents_copy[human_id] = copy.deepcopy(new_av)
+                    shifted_humans.append(human_id)
                       
-            for machine in env.machine_agents:
-                if (machine.id not in shifted_humans) and (random.random() <= switch_prob_machines):
+            for machine in env.machine_agents[:]:
+                machine_id = str(machine.id)
+                if (machine_id not in shifted_humans) and (random.random() <= switch_prob_machines):
                     env.machine_agents.remove(machine)
                     env.all_agents.remove(machine)
+                    machine_agents_copy[machine_id] = copy.deepcopy(machine)
                     
-                    new_human = copy.deepcopy(human_agents_copy[str(machine.id)])
+                    new_human = copy.deepcopy(human_agents_copy[machine_id])
                     env.human_agents.append(new_human)
                     
-                    shifted_avs.append(str(machine.id))
+                    shifted_avs.append(machine_id)
              
             env.all_agents = env.machine_agents + env.human_agents       
             env._initialize_machine_agents()
