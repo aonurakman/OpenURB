@@ -26,9 +26,9 @@ def test_act_respects_action_mask_when_exploiting():
         action_space_size=4,
         num_agents=1,
         global_state_size=5,
-        eps_init=0.0,
-        eps_decay=1.0,
-        eps_min=0.0,
+        temp_init=0.0,
+        temp_decay=1.0,
+        temp_min=0.0,
         buffer_size=8,
         batch_size=2,
         lr=0.01,
@@ -58,7 +58,7 @@ def test_act_respects_action_mask_when_exploiting():
     assert action == 2
 
 
-def test_learn_updates_parameters_and_decays_epsilon():
+def test_learn_updates_parameters_and_decays_temperature():
     np.random.seed(1)
     torch.manual_seed(1)
 
@@ -67,9 +67,9 @@ def test_learn_updates_parameters_and_decays_epsilon():
         action_space_size=2,
         num_agents=2,
         global_state_size=6,
-        eps_init=0.9,
-        eps_decay=0.5,
-        eps_min=0.0,
+        temp_init=0.9,
+        temp_decay=0.5,
+        temp_min=0.0,
         buffer_size=16,
         batch_size=2,
         lr=0.01,
@@ -108,10 +108,10 @@ def test_learn_updates_parameters_and_decays_epsilon():
     for _ in range(2):
         qmix.store_episode(obs_batch, actions_batch, rewards_batch, active_mask, global_state)
 
-    epsilon_before = qmix.epsilon
+    temp_before = qmix.temperature
     mix_weight_before = qmix.mixing_net.hyper_b2[0].weight.detach().clone()
     qmix.learn()
 
     assert len(qmix.loss) == 1
-    assert qmix.epsilon == pytest.approx(epsilon_before * qmix.eps_decay)
+    assert qmix.temperature == pytest.approx(temp_before * qmix.temp_decay)
     assert not torch.allclose(qmix.mixing_net.hyper_b2[0].weight, mix_weight_before)

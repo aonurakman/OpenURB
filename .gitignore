@@ -213,3 +213,5 @@ external_tasks/.mplconfig/
 *.npy
 
 servers/
+todo.txt
+archive/

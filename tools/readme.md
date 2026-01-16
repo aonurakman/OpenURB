@@ -27,3 +27,14 @@ python tools/reproduce.py --id <existing_exp_id> [--env-seed <seed>] [--torch-se
 
 The helper stores outputs alongside the original results: plain repeats become
 `<id>_repeated`, while seed overrides yield `<id>_v2`, `<id>_v3`, and so on.
+
+### run_todo.py
+
+Run the commands in `todo.txt` in parallel batches and save each command's stdout/stderr
+to `results/<exp_id>/stdout.log` (an `--id` is auto-added when missing).
+
+Usage:
+
+```bash
+python tools/run_todo.py todo.txt --jobs 3
+```

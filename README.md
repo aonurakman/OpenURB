@@ -158,11 +158,10 @@ and require task configs with `dynamic` in the name.
 All scripts automatically run `analysis/metrics.py` at the end of an experiment to generate KPI outputs
 in the experiment's `results/<exp_id>/metrics/` folder.
 
-### Optional: Weights & Biases logging
+### Weights & Biases logging
 
-All experiment scripts support optional Weights & Biases logging and will stream per-episode mean
-rewards and travel times (overall + by agent kind) as episode CSVs are written to disk. Use
-`--no-wandb` to disable logging if you do not want W&B integration or if `wandb` is not installed.
+All experiment scripts support Weights & Biases logging and will stream per-episode mean rewards and
+travel times (overall + by agent kind) as episode CSVs are written to disk.
 
 1. Create `wandb_config.json` in the repo root (gitignored) with your W&B settings:
 
@@ -179,10 +178,10 @@ rewards and travel times (overall + by agent kind) as episode CSVs are written t
 2. Run:
 
 ```bash
-python scripts/open_iql.py [--id <exp_id>] --alg-conf <hyperparam_id> --task-conf <task_id> --net <net_name> [--env-conf <env_conf_id>] [--env-seed <env_seed>] [--torch-seed <torch_seed>] [--wandb-config <path>] [--no-wandb]
+python scripts/open_iql.py [--id <exp_id>] --alg-conf <hyperparam_id> --task-conf <task_id> --net <net_name> [--env-conf <env_conf_id>] [--env-seed <env_seed>] [--torch-seed <torch_seed>] [--wandb-config <path>]
 ```
 
-Use `--no-wandb` to disable logging while keeping the original disk outputs. If `--id` is omitted, scripts auto-generate one and print it before starting.
+If `--id` is omitted, scripts auto-generate one and print it before starting.
 
 ## external_tasks (sanity checks)
 
