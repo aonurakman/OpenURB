@@ -6,6 +6,9 @@ This follows the standard QMIX setup:
 - A monotonic mixing network `Q_tot(s, Q_1..Q_n)` trained with a TD loss.
 - Target networks (agent + mixer) for stable TD targets.
 - Optional Double Q-learning for target action selection.
+-
+- Exploration uses a Boltzmann (softmax) policy over per-agent Q-values, controlled by a
+  temperature parameter (higher = more exploration, lower = more greedy).
 
 Practical notes:
 - Single-step tasks are handled as length-1 sequences (no special-casing).
@@ -158,9 +161,9 @@ class QMIX(BaseLearningModel):
         num_agents: int,
         global_state_size: int,
         device: str = "cpu",
-        eps_init: float = 1.0,
-        eps_decay: float = 0.999,
-        eps_min: float = 0.05,
+        temp_init: float = 1.0,
+        temp_decay: float = 0.999,
+        temp_min: float = 0.05,
         buffer_size: int = 2048,
         batch_size: int = 32,
         lr: float = 3e-4,
@@ -190,11 +193,11 @@ class QMIX(BaseLearningModel):
         # - If agents are homogeneous, sharing reduces parameters and improves sample efficiency.
         # - If agents are heterogeneous, you may want per-agent networks (share_parameters=False).
         self.share_parameters = bool(share_parameters)
-        # Epsilon-greedy exploration for decentralized execution: each agent picks random actions
-        # with probability epsilon, otherwise acts greedily w.r.t. its Q-network.
-        self.epsilon = float(eps_init)
-        self.eps_decay = float(eps_decay)
-        self.eps_min = float(eps_min)
+        # Boltzmann (softmax) exploration for decentralized execution:
+        # sample actions from softmax(Q_i(o_i,·)/temperature), annealing temperature over time.
+        self.temperature = float(temp_init)
+        self.temp_decay = float(temp_decay)
+        self.temp_min = float(temp_min)
         # Batch size counts "episodes" stored in replay (variable-length sequences).
         self.batch_size = int(batch_size)
         self.num_epochs = int(num_epochs)
@@ -328,10 +331,17 @@ class QMIX(BaseLearningModel):
             elif not mask.any():
                 return self._random_action(action_mask)
 
-        # Epsilon-greedy exploration on top of masked Q-values.
-        if np.random.rand() < self.epsilon:
-            return self._random_action(action_mask)
-        return int(torch.argmax(q_values).item())
+        return self._boltzmann_action(q_values)
+
+    def _boltzmann_action(self, q_values: torch.Tensor) -> int:
+        # q_values: [A] (already masked if an action_mask was provided)
+        temp = float(self.temperature)
+        if temp <= 0.0:
+            return int(torch.argmax(q_values).item())
+        logits = q_values / temp
+        logits = logits - torch.max(logits)
+        dist = torch.distributions.Categorical(logits=logits)
+        return int(dist.sample().item())
 
     def store_transition(
         self,
@@ -632,12 +642,12 @@ class QMIX(BaseLearningModel):
             step_losses.append(float(loss.item()))
 
         self.loss.append(float(sum(step_losses) / len(step_losses)))
-        # Decay epsilon after learning updates.
-        self.decay_epsilon()
+        # Decay temperature after learning updates.
+        self.decay_temperature()
 
-    def decay_epsilon(self) -> None:
-        # Keep exploration above eps_min so agents keep sampling alternative actions.
-        self.epsilon = max(self.eps_min, self.epsilon * self.eps_decay)
+    def decay_temperature(self) -> None:
+        # Keep temperature above temp_min so agents keep sampling alternative actions.
+        self.temperature = max(self.temp_min, self.temperature * self.temp_decay)
 
     def set_eval_mode(self) -> None:
         # Switch networks to eval mode (disables dropout, uses running stats for batchnorm, etc.).

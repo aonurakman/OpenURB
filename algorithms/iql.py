@@ -5,6 +5,9 @@ This is a classic (Double) DQN with:
 - A value network and a target network.
 - TD targets with optional Double DQN target action selection.
 - Replay buffer + gradient clipping.
+-
+- Exploration uses a Boltzmann (softmax) policy over Q-values, controlled by a temperature
+  parameter (higher = more exploration, lower = more greedy).
 
 Usage:
 - Single-step tasks (OpenURB): call `act(state)` then `push(reward)` (default `done=True`).
@@ -93,9 +96,9 @@ class DQN(BaseLearningModel):
         state_size: int,
         action_space_size: int,
         device: str = "cpu",
-        eps_init: float = 0.99,
-        eps_decay: float = 0.998,
-        eps_min: float = 0.05,
+        temp_init: float = 1.0,
+        temp_decay: float = 0.999,
+        temp_min: float = 0.05,
         buffer_size: int = 256,
         batch_size: int = 16,
         lr: float = 0.003,
@@ -113,11 +116,11 @@ class DQN(BaseLearningModel):
         super().__init__()
         self.device = device
         self.action_space_size = int(action_space_size)
-        # Epsilon-greedy exploration schedule (classic DQN/IQL):
-        # with prob epsilon, take a random action; otherwise take argmax_a Q(s,a).
-        self.epsilon = float(eps_init)
-        self.eps_decay = float(eps_decay)
-        self.eps_min = float(eps_min)
+        # Boltzmann (softmax) exploration schedule:
+        # sample actions from softmax(Q(s,·)/temperature), annealing temperature over time.
+        self.temperature = float(temp_init)
+        self.temp_decay = float(temp_decay)
+        self.temp_min = float(temp_min)
         # Recurrent Q-network settings. We keep the GRU always-on (like IPPO/QMIX).
         # If rnn_hidden_dim is 0, default to the last MLP width (a reasonable baseline).
         self.rnn_hidden_dim = int(rnn_hidden_dim) if int(rnn_hidden_dim) > 0 else int(widths[-1])
@@ -174,23 +177,29 @@ class DQN(BaseLearningModel):
         self._episode_steps = []
 
     def act(self, state: np.ndarray) -> int:
-        # Epsilon-greedy action selection. This is the "I" in IQL: each agent explores independently.
-        if np.random.rand() < self.epsilon:
-            # Explore: random action (ignores Q-network).
-            action = int(np.random.choice(self.action_space_size))
-        else:
-            # Exploit: run the recurrent Q-network for a single step, updating hidden state.
-            # We pass a sequence of length 1: [B=1, T=1, obs_dim].
-            with torch.no_grad():
-                obs_seq = torch.as_tensor(state, dtype=torch.float32, device=self.device).view(1, 1, -1)
-                q_seq, hn = self.value_network(obs_seq, self._inference_hidden)
-                self._inference_hidden = hn
-                q_values = q_seq[:, -1, :]
-            # Greedy action w.r.t. predicted Q-values.
-            action = int(torch.argmax(q_values, dim=-1).item())
+        # Run the recurrent Q-network for a single step, updating hidden state.
+        # We pass a sequence of length 1: [B=1, T=1, obs_dim].
+        with torch.no_grad():
+            obs_seq = torch.as_tensor(state, dtype=torch.float32, device=self.device).view(1, 1, -1)
+            q_seq, hn = self.value_network(obs_seq, self._inference_hidden)
+            self._inference_hidden = hn
+            q_values = q_seq[:, -1, :].squeeze(0).squeeze(0)  # [A]
+
+        action = self._boltzmann_action(q_values)
         self.last_state = np.asarray(state, dtype=np.float32)
         self.last_action = action
         return action
+
+    def _boltzmann_action(self, q_values: torch.Tensor) -> int:
+        # q_values: [A]
+        temp = float(self.temperature)
+        if temp <= 0.0:
+            return int(torch.argmax(q_values).item())
+        logits = q_values / temp
+        # Improve numeric stability for large logits.
+        logits = logits - torch.max(logits)
+        dist = torch.distributions.Categorical(logits=logits)
+        return int(dist.sample().item())
 
     def push(self, reward: float, next_state: Optional[np.ndarray] = None, done: bool = True) -> None:
         # Convenience API used in OpenURB (single-step): act(state) then push(reward).
@@ -332,12 +341,12 @@ class DQN(BaseLearningModel):
             step_losses.append(float(loss.item()))
 
         self.loss.append(float(sum(step_losses) / len(step_losses)))
-        # DQN typically decays epsilon after updates (not after environment steps).
-        self.decay_epsilon()
+        # Temperature is typically annealed after updates (not after environment steps).
+        self.decay_temperature()
 
     def learn(self) -> None:
         self._learn_rnn()
 
-    def decay_epsilon(self) -> None:
-        # Keep exploration above eps_min so the agent doesn't get stuck too early.
-        self.epsilon = max(self.eps_min, self.epsilon * self.eps_decay)
+    def decay_temperature(self) -> None:
+        # Keep temperature above temp_min so exploration doesn't collapse too early.
+        self.temperature = max(self.temp_min, self.temperature * self.temp_decay)
