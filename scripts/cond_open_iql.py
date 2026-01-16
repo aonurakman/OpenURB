@@ -263,8 +263,8 @@ if __name__ == "__main__":
     ######## Set policies for machine agents ########
     for idx in range(len(env.machine_agents)):
         env.machine_agents[idx].model = DQN(obs_size, env.machine_agents[idx].action_space_size, 
-                                            device=device, eps_init=eps_init, eps_decay=eps_decay,
-                                            eps_min=eps_min, buffer_size=buffer_size, batch_size=batch_size, lr=lr,
+                                            device=device, temp_init=temp_init, temp_decay=temp_decay,
+                                            temp_min=temp_min, buffer_size=buffer_size, batch_size=batch_size, lr=lr,
                                             num_epochs=num_epochs, num_hidden=num_hidden, widths=widths,
                                             rnn_hidden_dim=globals().get("rnn_hidden_dim", 0),
                                             seq_len=globals().get("seq_len", 8),
@@ -352,9 +352,9 @@ if __name__ == "__main__":
                             obs_size,
                             env.action_space_size,
                             device=device,
-                            eps_init=eps_init,
-                            eps_decay=eps_decay,
-                            eps_min=eps_min,
+                            temp_init=temp_init,
+                            temp_decay=temp_decay,
+                            temp_min=temp_min,
                             buffer_size=buffer_size,
                             batch_size=batch_size,
                             lr=lr,
@@ -422,7 +422,7 @@ if __name__ == "__main__":
     ###############################
     # Make machines deterministic
     for agent in env.machine_agents:
-        agent.model.epsilon = 0.0
+        agent.model.temperature = 0.0
         agent.model.q_network.eval()
         
     pbar.set_description("Testing")

@@ -352,9 +352,9 @@ if __name__ == "__main__":
         num_agents=len(agent_id_list),
         global_state_size=global_state_size,
         device=device,
-        eps_init=eps_init,
-        eps_decay=eps_decay,
-        eps_min=eps_min,
+        temp_init=temp_init,
+        temp_decay=temp_decay,
+        temp_min=temp_min,
         buffer_size=buffer_size,
         batch_size=batch_size,
         lr=lr,
@@ -548,7 +548,7 @@ if __name__ == "__main__":
     ######## Testing phase ########
     ###############################
     # Freeze exploration and run deterministic policy for evaluation.
-    qmix.epsilon = 0.0
+    qmix.temperature = 0.0
     qmix.set_eval_mode()
         
     pbar.set_description("Testing")
