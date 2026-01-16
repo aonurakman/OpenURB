@@ -58,10 +58,13 @@ def _infer_script_path(argv: list[str], repo_root: Path) -> Optional[Path]:
     return None
 
 
-def _infer_algorithm(script_path: Optional[Path]) -> str:
+def _infer_algorithm(script_path: Optional[Path], argv: list[str]) -> str:
     if script_path is None:
         return "exp"
     name = script_path.stem.lower()
+    if "baseline" in name:
+        model = _get_flag_value(argv, "--model") or _get_flag_value(argv, "--algorithm")
+        return model.lower() if model else "baseline"
     for algo in ("iql", "ippo", "qmix"):
         if algo in name:
             return algo
@@ -74,7 +77,7 @@ def _build_exp_id(
 ) -> str:
     script_path = _infer_script_path(argv, repo_root)
     conditional = bool(script_path and script_path.name.startswith("cond_"))
-    algorithm = _infer_algorithm(script_path)
+    algorithm = _infer_algorithm(script_path, argv)
 
     network = _get_flag_value(argv, "--net") or "unk"
     alg_conf = _get_flag_value(argv, "--alg-conf") or "config1"
