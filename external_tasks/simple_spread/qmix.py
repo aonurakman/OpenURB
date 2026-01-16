@@ -55,9 +55,9 @@ def main():
     global_state_size = int(global_state.shape[0]) if global_state is not None else int(n_agents * obs_size)
 
     qmix_kwargs = dict(
-        eps_init=1.0,
-        eps_decay=0.999,
-        eps_min=0.05,
+        temp_init=1.0,
+        temp_decay=0.999,
+        temp_min=0.05,
         buffer_size=200_000,
         batch_size=64,
         lr=1e-4,
@@ -92,8 +92,8 @@ def main():
         return obs_batch.reshape(-1).astype(np.float32, copy=False)
 
     def run_eval(start_seed: int) -> float:
-        eps_backup = qmix.epsilon
-        qmix.epsilon = 0.0
+        temp_backup = qmix.temperature
+        qmix.temperature = 0.0
         qmix.set_eval_mode()
 
         returns = []
@@ -121,7 +121,7 @@ def main():
                     break
             returns.append(total / n_agents)
 
-        qmix.epsilon = eps_backup
+        qmix.temperature = temp_backup
         qmix.set_train_mode()
         return float(np.mean(returns))
 
@@ -232,7 +232,10 @@ def main():
                 eval_rewards,
                 window=50,
             )
-            print(f"[{ep+1}/{episodes}] train_reward={episode_rewards[-1]:.3f} loss={episode_losses[-1]:.5f} eps={qmix.epsilon:.3f}")
+            print(
+                f"[{ep+1}/{episodes}] train_reward={episode_rewards[-1]:.3f} "
+                f"loss={episode_losses[-1]:.5f} temp={qmix.temperature:.3f}"
+            )
 
     plot_curves(os.path.join(out_dir, "learning_curves.png"), episode_rewards, episode_losses, eval_rewards, window=50)
     np.save(os.path.join(out_dir, "episode_rewards.npy"), np.asarray(episode_rewards, dtype=np.float32))
@@ -252,7 +255,7 @@ def main():
             qmix.agent_nets.load_state_dict(ckpt["agent_state_dict"])
             qmix.target_agent_nets.load_state_dict(ckpt["agent_state_dict"])
 
-    qmix.epsilon = 0.0
+    qmix.temperature = 0.0
     qmix.set_eval_mode()
 
     env_viz = make_env(seed=seed + 200_000, render_mode="rgb_array")

@@ -41,9 +41,9 @@ def main():
     action_space_size = env.action_space(agent_ids[0]).n
 
     dqn_kwargs = dict(
-        eps_init=1.0,
-        eps_decay=0.999,
-        eps_min=0.05,
+        temp_init=1.0,
+        temp_decay=0.999,
+        temp_min=0.05,
         buffer_size=50_000,
         batch_size=128,
         lr=1e-3,
@@ -68,9 +68,9 @@ def main():
     best_eval = -float("inf")
 
     def run_eval(start_seed: int) -> float:
-        eps_backup = {aid: models[aid].epsilon for aid in agent_ids}
+        temp_backup = {aid: models[aid].temperature for aid in agent_ids}
         for aid in agent_ids:
-            models[aid].epsilon = 0.0
+            models[aid].temperature = 0.0
             models[aid].value_network.eval()
             models[aid].target_network.eval()
 
@@ -98,7 +98,7 @@ def main():
             returns.append(total / n_agents)
 
         for aid in agent_ids:
-            models[aid].epsilon = eps_backup[aid]
+            models[aid].temperature = temp_backup[aid]
             models[aid].value_network.train()
         return float(np.mean(returns))
 
@@ -178,7 +178,7 @@ def main():
             )
             print(
                 f"[{ep+1}/{episodes}] train_reward={episode_rewards[-1]:.3f} "
-                f"loss={episode_losses[-1]:.5f} eps~{np.mean([m.epsilon for m in models.values()]):.3f}"
+                f"loss={episode_losses[-1]:.5f} temp~{np.mean([m.temperature for m in models.values()]):.3f}"
             )
 
     plot_curves(os.path.join(out_dir, "learning_curves.png"), episode_rewards, episode_losses, eval_rewards, window=50)
@@ -195,7 +195,7 @@ def main():
             models[aid].target_network.load_state_dict(ckpt["target_state_dicts"][aid])
 
     for aid in agent_ids:
-        models[aid].epsilon = 0.0
+        models[aid].temperature = 0.0
         models[aid].value_network.eval()
 
     env_viz = make_env(seed=seed + 200_000, render_mode="rgb_array")
