@@ -1,8 +1,10 @@
 import argparse
 import os
 import shlex
+import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +17,86 @@ class CommandSpec:
     argv: list[str]
     exp_id: str
     log_path: Path
+
+
+@dataclass
+class RunningProcess:
+    spec: CommandSpec
+    process: subprocess.Popen[str]
+    log_f: object
+
+
+ACTIVE_PROCESSES: list[RunningProcess] = []
+ACTIVE_LOCK = threading.Lock()
+SHUTDOWN_REQUESTED = False
+
+
+def _register_process(handle: RunningProcess) -> None:
+    with ACTIVE_LOCK:
+        ACTIVE_PROCESSES.append(handle)
+
+
+def _unregister_process(process: subprocess.Popen[str]) -> None:
+    with ACTIVE_LOCK:
+        ACTIVE_PROCESSES[:] = [h for h in ACTIVE_PROCESSES if h.process is not process]
+
+
+def _snapshot_processes() -> list[RunningProcess]:
+    with ACTIVE_LOCK:
+        return list(ACTIVE_PROCESSES)
+
+
+def _log_shutdown(log_f: object, reason: str) -> None:
+    try:
+        log_f.write(f"\nSHUTDOWN_REASON: {reason}\n")
+        log_f.write(f"SHUTDOWN_EPOCH: {time.time()}\n")
+        log_f.flush()
+    except Exception:
+        pass
+
+
+def _wait_for_exit(handles: list[RunningProcess], timeout_s: float) -> list[RunningProcess]:
+    deadline = time.time() + timeout_s
+    remaining = handles
+    while time.time() < deadline:
+        remaining = [h for h in handles if h.process.poll() is None]
+        if not remaining:
+            return []
+        time.sleep(0.2)
+    return remaining
+
+
+def _terminate_active(reason: str) -> None:
+    handles = [h for h in _snapshot_processes() if h.process.poll() is None]
+    if not handles:
+        return
+    print(f"[SHUTDOWN] {reason}: terminating {len(handles)} running process(es).")
+    for handle in handles:
+        _log_shutdown(handle.log_f, reason)
+        try:
+            handle.process.send_signal(signal.SIGINT)
+        except Exception:
+            pass
+    remaining = _wait_for_exit(handles, 5.0)
+    for handle in remaining:
+        try:
+            handle.process.terminate()
+        except Exception:
+            pass
+    remaining = _wait_for_exit(remaining, 5.0)
+    for handle in remaining:
+        try:
+            handle.process.kill()
+        except Exception:
+            pass
+
+
+def _request_shutdown(signum: int, _frame) -> None:
+    global SHUTDOWN_REQUESTED
+    if SHUTDOWN_REQUESTED:
+        return
+    SHUTDOWN_REQUESTED = True
+    _terminate_active(reason=f"SIGNAL_{signum}")
 
 
 def _read_commands(path: Path) -> list[str]:
@@ -157,6 +239,8 @@ def _run_batch(batch: list[CommandSpec], repo_root: Path, env: dict[str, str]) -
     processes: list[tuple[CommandSpec, subprocess.Popen[str], object]] = []
     try:
         for spec in batch:
+            if SHUTDOWN_REQUESTED:
+                break
             log_f = spec.log_path.open("w", encoding="utf-8")
             cmd_str = shlex.join(spec.argv)
             log_f.write(f"COMMAND: {cmd_str}\n")
@@ -171,6 +255,7 @@ def _run_batch(batch: list[CommandSpec], repo_root: Path, env: dict[str, str]) -
                 text=True,
                 env=env,
             )
+            _register_process(RunningProcess(spec=spec, process=process, log_f=log_f))
             processes.append((spec, process, log_f))
             print(f"[START] {spec.exp_id} -> {spec.log_path}")
 
@@ -178,19 +263,13 @@ def _run_batch(batch: list[CommandSpec], repo_root: Path, env: dict[str, str]) -
         for spec, process, log_f in processes:
             code = int(process.wait())
             codes.append(code)
+            _unregister_process(process)
             log_f.write(f"\nEND_EPOCH: {time.time()}\n")
             log_f.write(f"RETURN_CODE: {code}\n")
             log_f.close()
             status = "OK" if code == 0 else f"FAIL({code})"
             print(f"[DONE]  {spec.exp_id} {status}")
         return codes
-    except KeyboardInterrupt:
-        for _, process, _ in processes:
-            try:
-                process.terminate()
-            except Exception:
-                pass
-        raise
     finally:
         for _, process, log_f in processes:
             if getattr(process, "poll", lambda: None)() is None:
@@ -198,6 +277,7 @@ def _run_batch(batch: list[CommandSpec], repo_root: Path, env: dict[str, str]) -
                     process.kill()
                 except Exception:
                     pass
+            _unregister_process(process)
             try:
                 log_f.close()
             except Exception:
@@ -205,6 +285,9 @@ def _run_batch(batch: list[CommandSpec], repo_root: Path, env: dict[str, str]) -
 
 
 def main() -> int:
+    signal.signal(signal.SIGINT, _request_shutdown)
+    signal.signal(signal.SIGTERM, _request_shutdown)
+
     parser = argparse.ArgumentParser(
         description="Run the commands in a todo file in parallel batches (default: 3 at a time)."
     )
@@ -270,6 +353,8 @@ def main() -> int:
         batch = specs[i : i + jobs]
         print(f"\n=== Batch {batch_idx} ({len(batch)} cmds) ===")
         codes = _run_batch(batch, repo_root=repo_root, env=env)
+        if SHUTDOWN_REQUESTED:
+            return 130
         batch_failures = sum(1 for c in codes if c != 0)
         failures += batch_failures
         if batch_failures and args.stop_on_failure:
