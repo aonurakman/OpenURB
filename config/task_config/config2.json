@@ -1,24 +1,24 @@
 {
     "desc": [
         "20% AVs, 80% humans.",
-        "500 days of human learning",
+        "300 days of human learning",
         "100 test episodes",
         "Humans DO NOT adapt during AV learning",
         "AVs are cooperative",
         "Human model is gawron",
         "Gawron parameters are default values in RouteRL",
-        "3000 episodes of dynamic exchanges among groups",
+        "2000 episodes of dynamic exchanges among groups",
         "They switch every 10 episodes",
         "Switch probability for humans is fixed, 0.01",
         "Switch probability for AVs is fixed, 0.001"
     ],
     "ratio_machines": 0.2,
-    "human_learning_episodes": 500,
+    "human_learning_episodes": 300,
     "test_eps": 100,
     "should_humans_adapt": false,
     "av_behavior": "cooperative",
     "human_model": "gawron",
-    "dynamic_episodes": 3000,
+    "dynamic_episodes": 2000,
     "switch_interval": 10,
     "switch_prob_humans": 0.01,
     "switch_prob_machines": 0.001

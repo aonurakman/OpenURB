@@ -16,7 +16,8 @@ and `algorithms/qmix.py`.
 - `widths`: layer widths; length must be `num_hidden + 1`.
 - `rnn_hidden_dim`: GRU hidden size for the agent networks.
 - `mixing_embed_dim`: hidden size for the QMIX mixing network.
-- `hypernet_embed`: hidden size for the hypernetworks that generate mixing weights.
+- `mixing_num_hidden`: number of hidden layers in the mixer hypernetworks.
+- `mixing_widths`: hidden-layer widths for the mixer hypernetworks; length must be `mixing_num_hidden`.
 - `max_grad_norm`: gradient clipping threshold applied to both networks.
 - `update_every`: run learning every N episodes.
 - `gamma`: discount factor for TD targets (single-step episodes effectively use `done=True`).

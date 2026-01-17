@@ -12,7 +12,8 @@
     "num_hidden" : 1,
     "widths" : [32, 32],
     "mixing_embed_dim" : 16,
-    "hypernet_embed" : 32,
+    "mixing_num_hidden" : 1,
+    "mixing_widths" : [32],
     "max_grad_norm" : 10.0,
     "update_every" : 1,
 

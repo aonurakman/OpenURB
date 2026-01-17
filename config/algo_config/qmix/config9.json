@@ -1,27 +1,33 @@
 {
-    "training_eps" : 3000,
-    "share_parameters" : false,
-
-    "temp_init" : 1.0,
-    "temp_decay" : 0.999,
-    "temp_min" : 0.05,
-    "buffer_size" : 2048,
-    "batch_size" : 16,
-    "lr" : 0.0003,
-    "num_epochs" : 1,
-    "num_hidden" : 2,
-    "widths" : [64, 64, 64],
-    "mixing_embed_dim" : 32,
-    "hypernet_embed" : 64,
-    "max_grad_norm" : 10.0,
-    "update_every" : 1,
-
-    "gamma" : 0.99,
-    "target_update_every" : 200,
-    "double_q" : true,
-    "tau" : 1.0,
-    "rnn_hidden_dim" : 64,
-    "mixing_weight_clip" : null,
-    "q_tot_clip" : null,
-    "use_huber_loss" : true
+    "training_eps": 2000,
+    "share_parameters": false,
+    "temp_init": 1.5,
+    "temp_decay": 0.999,
+    "temp_min": 0.2,
+    "buffer_size": 2048,
+    "batch_size": 64,
+    "lr": 0.0005,
+    "num_epochs": 2,
+    "num_hidden": 2,
+    "widths": [
+        32,
+        64,
+        32
+    ],
+    "mixing_embed_dim": 64,
+    "max_grad_norm": 10.0,
+    "update_every": 2,
+    "gamma": 0.99,
+    "target_update_every": 200,
+    "double_q": true,
+    "tau": 1.0,
+    "rnn_hidden_dim": 64,
+    "mixing_weight_clip": 10.0,
+    "q_tot_clip": 50.0,
+    "use_huber_loss": true,
+    "mixing_num_hidden": 2,
+    "mixing_widths": [
+        256,
+        256
+    ]
 }
