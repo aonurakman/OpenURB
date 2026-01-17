@@ -289,10 +289,10 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _request_shutdown)
 
     parser = argparse.ArgumentParser(
-        description="Run the commands in a todo file in parallel batches (default: 3 at a time)."
+        description="Run the commands in a todo file in parallel batches (default: 4 at a time)."
     )
     parser.add_argument("todo", nargs="?", default="todo.txt", help="Path to todo file (default: todo.txt).")
-    parser.add_argument("--jobs", type=int, default=3, help="Number of commands to run in parallel per batch.")
+    parser.add_argument("--jobs", type=int, default=4, help="Number of commands to run in parallel per batch.")
     parser.add_argument(
         "--results-root",
         type=str,

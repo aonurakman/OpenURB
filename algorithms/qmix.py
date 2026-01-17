@@ -47,6 +47,18 @@ from baseline_models import BaseLearningModel
 __all__ = ["AgentRNN", "MixingNetwork", "QMIX"]
 
 
+def _build_mlp(in_dim: int, hidden_sizes: Sequence[int], out_dim: int) -> nn.Sequential:
+    layers: list[nn.Module] = []
+    last_dim = int(in_dim)
+    for hidden_dim in hidden_sizes:
+        hidden_dim = int(hidden_dim)
+        layers.append(nn.Linear(last_dim, hidden_dim))
+        layers.append(nn.ReLU())
+        last_dim = hidden_dim
+    layers.append(nn.Linear(last_dim, int(out_dim)))
+    return nn.Sequential(*layers)
+
+
 class AgentRNN(nn.Module):
     def __init__(
         self,
@@ -94,7 +106,7 @@ class MixingNetwork(nn.Module):
         num_agents: int,
         state_dim: int,
         mixing_embed_dim: int,
-        hypernet_embed: int,
+        hypernet_hidden_sizes: Sequence[int],
         weight_clip: Optional[float] = None,
     ):
         super().__init__()
@@ -103,26 +115,16 @@ class MixingNetwork(nn.Module):
         self.mixing_embed_dim = mixing_embed_dim
         self.weight_clip = float(weight_clip) if weight_clip is not None else None
 
+        hidden_sizes = tuple(int(x) for x in hypernet_hidden_sizes)
+
         # QMIX mixer uses "hypernetworks" that take the global state s and output the
         # mixing weights/biases. The key constraint from the QMIX paper is *monotonicity*:
         # dQ_tot / dQ_i >= 0. We enforce this by making the mixing weights non-negative.
-        self.hyper_w1 = nn.Sequential(
-            nn.Linear(state_dim, hypernet_embed),
-            nn.ReLU(),
-            nn.Linear(hypernet_embed, num_agents * mixing_embed_dim),
-        )
-        self.hyper_b1 = nn.Linear(state_dim, mixing_embed_dim)
+        self.hyper_w1 = _build_mlp(state_dim, hidden_sizes, num_agents * mixing_embed_dim)
+        self.hyper_b1 = _build_mlp(state_dim, hidden_sizes, mixing_embed_dim)
 
-        self.hyper_w2 = nn.Sequential(
-            nn.Linear(state_dim, hypernet_embed),
-            nn.ReLU(),
-            nn.Linear(hypernet_embed, mixing_embed_dim),
-        )
-        self.hyper_b2 = nn.Sequential(
-            nn.Linear(state_dim, hypernet_embed),
-            nn.ReLU(),
-            nn.Linear(hypernet_embed, 1),
-        )
+        self.hyper_w2 = _build_mlp(state_dim, hidden_sizes, mixing_embed_dim)
+        self.hyper_b2 = _build_mlp(state_dim, hidden_sizes, 1)
 
     def forward(self, agent_qs: torch.Tensor, states: torch.Tensor) -> torch.Tensor:
         # agent_qs: [B, N], states: [B, state_dim] -> [B]
@@ -173,6 +175,8 @@ class QMIX(BaseLearningModel):
         rnn_hidden_dim: int = 64,
         mixing_embed_dim: int = 32,
         hypernet_embed: int = 64,
+        mixing_num_hidden: Optional[int] = None,
+        mixing_widths: Optional[Sequence[int]] = None,
         max_grad_norm: float = 10.0,
         gamma: float = 0.99,
         target_update_every: int = 200,
@@ -213,6 +217,14 @@ class QMIX(BaseLearningModel):
         self.use_huber_loss = bool(use_huber_loss)
         self._learn_steps = 0
 
+        if mixing_widths is not None:
+            mixing_widths = tuple(int(x) for x in mixing_widths)
+            if mixing_num_hidden is not None and len(mixing_widths) != int(mixing_num_hidden):
+                raise AssertionError("QMIX mixing_widths and mixing_num_hidden mismatch!")
+            hypernet_hidden_sizes = mixing_widths
+        else:
+            hypernet_hidden_sizes = (int(hypernet_embed),)
+
         if self.share_parameters:
             # One shared agent network is reused for all agents.
             self.agent_net = AgentRNN(
@@ -239,7 +251,7 @@ class QMIX(BaseLearningModel):
             self.num_agents,
             self.global_state_size,
             mixing_embed_dim,
-            hypernet_embed,
+            hypernet_hidden_sizes,
             weight_clip=mixing_weight_clip,
         ).to(self.device)
         # Target mixer is lagged, same reason as target agent networks.
