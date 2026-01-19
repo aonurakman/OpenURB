@@ -21,9 +21,9 @@ def make_env(seed: int, render_mode=None):
 
 def main():
     seed = 42
-    episodes = 6000
-    learning_starts = 200
-    learn_every_steps = 1
+    episodes = 4000
+    learning_starts = 400
+    learn_every_steps = 4
     eval_every_episodes = 200
     eval_episodes = 20
     min_improve = 1e-3
@@ -45,7 +45,7 @@ def main():
         temp_decay=0.999,
         temp_min=0.05,
         buffer_size=50_000,
-        batch_size=128,
+        batch_size=256,
         lr=1e-3,
         num_epochs=1,
         num_hidden=2,
