@@ -6,4 +6,5 @@ polars==1.27.1
 tensordict==0.7.0
 torch>=2.6.0
 tqdm>=4.67.1
-wandb
+wandb>=0.24.0
+pygame>=2.6.1
