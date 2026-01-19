@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -235,53 +236,44 @@ def _ensure_id_and_log(
     return CommandSpec(raw=raw, argv=argv, exp_id=exp_id, log_path=log_path)
 
 
-def _run_batch(batch: list[CommandSpec], repo_root: Path, env: dict[str, str]) -> list[int]:
-    processes: list[tuple[CommandSpec, subprocess.Popen[str], object]] = []
+def _start_process(spec: CommandSpec, repo_root: Path, env: dict[str, str]) -> RunningProcess:
+    log_f = spec.log_path.open("w", encoding="utf-8")
+    cmd_str = shlex.join(spec.argv)
+    log_f.write(f"COMMAND: {cmd_str}\n")
+    log_f.write(f"START_EPOCH: {time.time()}\n\n")
+    log_f.flush()
+
+    process = subprocess.Popen(
+        spec.argv,
+        cwd=str(repo_root),
+        stdout=log_f,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=env,
+    )
+    handle = RunningProcess(spec=spec, process=process, log_f=log_f)
+    _register_process(handle)
+    print(f"[START] {spec.exp_id} -> {spec.log_path}")
+    return handle
+
+
+def _finalize_process(handle: RunningProcess) -> int:
+    process = handle.process
+    code = int(process.wait())
+    _unregister_process(process)
+    log_f = handle.log_f
     try:
-        for spec in batch:
-            if SHUTDOWN_REQUESTED:
-                break
-            log_f = spec.log_path.open("w", encoding="utf-8")
-            cmd_str = shlex.join(spec.argv)
-            log_f.write(f"COMMAND: {cmd_str}\n")
-            log_f.write(f"START_EPOCH: {time.time()}\n\n")
-            log_f.flush()
-
-            process = subprocess.Popen(
-                spec.argv,
-                cwd=str(repo_root),
-                stdout=log_f,
-                stderr=subprocess.STDOUT,
-                text=True,
-                env=env,
-            )
-            _register_process(RunningProcess(spec=spec, process=process, log_f=log_f))
-            processes.append((spec, process, log_f))
-            print(f"[START] {spec.exp_id} -> {spec.log_path}")
-
-        codes: list[int] = []
-        for spec, process, log_f in processes:
-            code = int(process.wait())
-            codes.append(code)
-            _unregister_process(process)
-            log_f.write(f"\nEND_EPOCH: {time.time()}\n")
-            log_f.write(f"RETURN_CODE: {code}\n")
-            log_f.close()
-            status = "OK" if code == 0 else f"FAIL({code})"
-            print(f"[DONE]  {spec.exp_id} {status}")
-        return codes
-    finally:
-        for _, process, log_f in processes:
-            if getattr(process, "poll", lambda: None)() is None:
-                try:
-                    process.kill()
-                except Exception:
-                    pass
-            _unregister_process(process)
-            try:
-                log_f.close()
-            except Exception:
-                pass
+        log_f.write(f"\nEND_EPOCH: {time.time()}\n")
+        log_f.write(f"RETURN_CODE: {code}\n")
+    except Exception:
+        pass
+    try:
+        log_f.close()
+    except Exception:
+        pass
+    status = "OK" if code == 0 else f"FAIL({code})"
+    print(f"[DONE]  {handle.spec.exp_id} {status}")
+    return code
 
 
 def main() -> int:
@@ -348,20 +340,54 @@ def main() -> int:
 
     jobs = max(1, int(args.jobs))
     failures = 0
-    for i in range(0, len(specs), jobs):
-        batch_idx = (i // jobs) + 1
-        batch = specs[i : i + jobs]
-        print(f"\n=== Batch {batch_idx} ({len(batch)} cmds) ===")
-        codes = _run_batch(batch, repo_root=repo_root, env=env)
+    pending = deque(specs)
+    running: list[RunningProcess] = []
+    stop_on_failure_triggered = False
+
+    try:
+        while pending or running:
+            while (
+                len(running) < jobs
+                and pending
+                and not SHUTDOWN_REQUESTED
+                and not stop_on_failure_triggered
+            ):
+                spec = pending.popleft()
+                handle = _start_process(spec, repo_root=repo_root, env=env)
+                running.append(handle)
+
+            if not running:
+                break
+
+            time.sleep(0.2)
+            for handle in running[:]:
+                if handle.process.poll() is None:
+                    continue
+                running.remove(handle)
+                code = _finalize_process(handle)
+                if code != 0:
+                    failures += 1
+                    if args.stop_on_failure and not stop_on_failure_triggered:
+                        stop_on_failure_triggered = True
+                        print("Stopping on failure.")
+                        _terminate_active(reason="STOP_ON_FAILURE")
+                        pending.clear()
+
         if SHUTDOWN_REQUESTED:
             return 130
-        batch_failures = sum(1 for c in codes if c != 0)
-        failures += batch_failures
-        if batch_failures and args.stop_on_failure:
-            print("Stopping on failure.")
-            return 1
-
-    return 0 if failures == 0 else 1
+        return 0 if failures == 0 else 1
+    finally:
+        for handle in running:
+            if handle.process.poll() is None:
+                try:
+                    handle.process.kill()
+                except Exception:
+                    pass
+            _unregister_process(handle.process)
+            try:
+                handle.log_f.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
