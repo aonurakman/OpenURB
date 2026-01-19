@@ -79,7 +79,7 @@ python scripts/<script_name>.py [--id <exp_id>] --alg-conf <hyperparam_id> --env
 
 where
 
-- ```<script_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, ```cond_open_ippo```, ```open_qmix```, and ```cond_open_qmix```,
+- ```<script_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, ```cond_open_ippo```, ```open_qmix```, ```cond_open_qmix```, ```open_vdn```, and ```cond_open_vdn```,
 - ```<exp_id>``` is an optional experiment identifier, for instance ```random_ing```,
 - ```<hyperparam_id>``` is the hyperparameterization identifier, it must correspond to a `.json` filename (without extension) in [`config/algo_config`](config/algo_config/). Provided scripts automatically select the algorithm-specific subfolder in this directory.
 - ```<env_conf_id>``` is the environment configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/env_config`](config/env_config/). It is used to parameterize environment-specific processes, such as path generation, disk operations, etc. It is **optional** and by default is set to `config1`.
@@ -109,6 +109,12 @@ Example for QMIX:
 
 ```bash
 python scripts/open_qmix.py --id deneme_qmix --alg-conf config1 --task-conf dynamic1 --net saint_arnoult --env-seed 42 --torch-seed 0
+```
+
+Example for VDN:
+
+```bash
+python scripts/open_vdn.py --id deneme_vdn --alg-conf config1 --task-conf dynamic1 --net saint_arnoult --env-seed 42 --torch-seed 0
 ```
 
 > All experiment scripts in this repo expect task configs with `dynamic` in the name.

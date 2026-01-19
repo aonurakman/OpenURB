@@ -12,6 +12,7 @@ SCRIPTS_DIR = Path("scripts")
 python_script = [SCRIPTS_DIR / "open_iql.py", SCRIPTS_DIR / "cond_open_iql.py"]
 python_script += [SCRIPTS_DIR / "open_ippo.py", SCRIPTS_DIR / "cond_open_ippo.py"]
 python_script += [SCRIPTS_DIR / "open_qmix.py", SCRIPTS_DIR / "cond_open_qmix.py"]
+python_script += [SCRIPTS_DIR / "open_vdn.py", SCRIPTS_DIR / "cond_open_vdn.py"]
 PYTHON = sys.executable
 
 @pytest.fixture(scope="session", autouse=True)

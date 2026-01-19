@@ -1,0 +1,28 @@
+{
+    "training_eps": 2000,
+    "share_parameters": false,
+    "temp_init": 1.0,
+    "temp_decay": 0.9985,
+    "temp_min": 0.1,
+    "buffer_size": 2048,
+    "batch_size": 64,
+    "lr": 0.0005,
+    "num_epochs": 2,
+    "num_hidden": 2,
+    "widths": [
+        32,
+        64,
+        32
+    ],
+    "rnn_hidden_dim": 64,
+    "max_grad_norm": 10.0,
+    "update_every": 2,
+    "gamma": 0.99,
+    "target_update_every": 200,
+    "double_q": true,
+    "tau": 1.0,
+    "q_tot_clip": null,
+    "use_huber_loss": true,
+    "normalize_by_active": true
+}
+

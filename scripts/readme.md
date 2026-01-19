@@ -7,6 +7,8 @@ We provide training scripts for open vs. conditional switching variants:
 - `cond_open_iql.py` is the conditional-switching version of the IQL setup.
 - `open_qmix.py` runs a QMIX setup with open switching.
 - `cond_open_qmix.py` is the QMIX variant with switching conditioned on group travel times.
+- `open_vdn.py` runs a VDN (Value Decomposition Networks) setup with open switching.
+- `cond_open_vdn.py` is the VDN variant with switching conditioned on group travel times.
 
 Baseline scripts are `open_baselines.py` and `cond_open_baselines.py` (see `baseline_models/readme.md`
 for available models). The open variants run dynamic switching (conditional in the `cond_` version)
