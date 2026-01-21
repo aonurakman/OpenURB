@@ -90,7 +90,7 @@ python scripts/<script_name>.py [--id <exp_id>] --alg-conf <hyperparam_id> --env
 
 where
 
-- ```<script_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, ```cond_open_ippo```, ```open_qmix```, ```cond_open_qmix```, ```open_vdn```, and ```cond_open_vdn```,
+- ```<script_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, ```cond_open_ippo```, ```open_qmix```, ```cond_open_qmix```, ```open_vdn```, ```cond_open_vdn```, ```open_pimac```, and ```cond_open_pimac```,
 - ```<exp_id>``` is an optional experiment identifier, for instance ```random_ing```,
 - ```<hyperparam_id>``` is the hyperparameterization identifier, it must correspond to a `.json` filename (without extension) in [`config/algo_config`](config/algo_config/). Provided scripts automatically select the algorithm-specific subfolder in this directory.
 - ```<env_conf_id>``` is the environment configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/env_config`](config/env_config/). It is used to parameterize environment-specific processes, such as path generation, disk operations, etc. It is **optional** and by default is set to `config1`.
@@ -158,6 +158,8 @@ We provide training scripts for open vs. conditional switching variants:
 - `cond_open_qmix.py` is the QMIX variant with switching conditioned on group travel times.
 - `open_vdn.py` runs a VDN (Value Decomposition Networks) setup with open switching.
 - `cond_open_vdn.py` is the VDN variant with switching conditioned on group travel times.
+- `open_pimac.py` runs the PI-MAC setup with open switching (set-based teacher distillation for scalable team context).
+- `cond_open_pimac.py` is the PI-MAC variant with switching conditioned on group travel times (same teacher distillation).
 
 Baseline scripts are `open_baselines.py` and `cond_open_baselines.py` (see `baseline_models/readme.md`
 for available models). The open variants run dynamic switching (conditional in the `cond_` version)
@@ -221,12 +223,14 @@ python external_tasks/simple_spread/iql.py
 python external_tasks/simple_spread/ippo.py
 python external_tasks/simple_spread/qmix.py
 python external_tasks/simple_spread/vdn.py
+python external_tasks/simple_spread/pimac.py
 
 python external_tasks/toy_env/random_policy.py
 python external_tasks/toy_env/iql.py
 python external_tasks/toy_env/ippo.py
 python external_tasks/toy_env/qmix.py
 python external_tasks/toy_env/vdn.py
+python external_tasks/toy_env/pimac.py
 ```
 
 ## Baseline models
