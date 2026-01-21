@@ -204,6 +204,8 @@ Outputs are written under `external_tasks/runs/<env>/<algo>/<timestamp>/`:
 - `best_checkpoint.pt` (best eval reward)
 - `policy_rollout.gif` (rollout of the best checkpoint; always headless)
 
+PI-MAC sanity scripts use the set-based teacher distillation from `algorithms/pimac.py` (no autoencoders).
+
 ### Environments
 
 - `simple_spread_v3` (PettingZoo MPE): `external_tasks/simple_spread/`
