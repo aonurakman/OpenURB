@@ -94,8 +94,10 @@ def _config_tag(config_name: str) -> str:
 def generate_exp_id(algorithm: str, network: str, alg_config: str,
                     env_config: str, task_config: str, env_seed: int,
                     torch_seed: Optional[int] = None, conditional: bool = False,
-                    results_root: Optional[str] = None) -> str:
+                    results_root: Optional[str] = None, version: Optional[str] = None) -> str:
     alg_name = str(algorithm).lower()
+    if version:
+        alg_name = f"{alg_name}v{version}"
     net_name = _shorten_network_name(network)
     alg_tag = _config_tag(alg_config)
     env_tag = _config_tag(env_config)

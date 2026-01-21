@@ -484,6 +484,18 @@ if __name__ == "__main__":
     losses_pd = pd.DataFrame([{"id": "vdn", "losses": vdn.loss}])
     losses_pd.to_csv(os.path.join(records_folder, "losses.csv"), index=False)
     save_mean_loss_plot(records_folder, {row["id"]: row["losses"] for row in losses_pd.to_dict("records")})
+    final_model_path = os.path.join(records_folder, "final_model.pt")
+    agent_state = vdn.agent_net.state_dict() if vdn.share_parameters else vdn.agent_nets.state_dict()
+    target_agent_state = vdn.target_agent_net.state_dict() if vdn.share_parameters else vdn.target_agent_nets.state_dict()
+    torch.save(
+        {
+            "algorithm": "vdn",
+            "share_parameters": vdn.share_parameters,
+            "agent_state_dict": agent_state,
+            "target_agent_state_dict": target_agent_state,
+        },
+        final_model_path,
+    )
     env.stop_simulation()
     clear_SUMO_files(os.path.join(records_folder, "SUMO_output"), episodes_folder, remove_additional_files=True)
     finish_runtime_tracking(runtime_tracker)
@@ -491,4 +503,3 @@ if __name__ == "__main__":
     last_logged_episode = log_new_episodes(wb_run, episodes_folder, last_logged_episode, "final", env)
     finish_wandb_run(wb_run, last_logged_episode)
     run_metrics(exp_id, repo_root)
-

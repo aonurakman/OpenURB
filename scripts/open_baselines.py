@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import polars as pl
+import torch
 from routerl import Keychain as kc
 from routerl import TrafficEnvironment
 from routerl import MachineAgent
@@ -402,6 +403,28 @@ if __name__ == "__main__":
 
     pbar.close()
     env.plot_results()
+    final_model_path = os.path.join(records_folder, "final_model.pt")
+
+    def _baseline_state(model):
+        state = {}
+        for key, value in getattr(model, "__dict__", {}).items():
+            if isinstance(value, np.ndarray):
+                state[key] = value.tolist()
+            elif isinstance(value, (np.integer, np.floating)):
+                state[key] = value.item()
+            else:
+                state[key] = value
+        return state
+
+    torch.save(
+        {
+            "algorithm": "baseline",
+            "baseline_model": baseline_model,
+            "machine_states": {str(agent.id): _baseline_state(agent.model) for agent in env.machine_agents},
+            "human_states": {str(agent.id): _baseline_state(agent.model) for agent in env.human_agents},
+        },
+        final_model_path,
+    )
 
     env.stop_simulation()
 

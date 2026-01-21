@@ -419,6 +419,19 @@ if __name__ == "__main__":
     losses_pd = pd.DataFrame([{"id": agent.id, "losses": agent.model.loss} for agent in env.machine_agents])
     losses_pd.to_csv(os.path.join(records_folder, "losses.csv"), index=False)
     save_mean_loss_plot(records_folder, {row["id"]: row["losses"] for row in losses_pd.to_dict("records")})
+    final_model_path = os.path.join(records_folder, "final_model.pt")
+    torch.save(
+        {
+            "algorithm": "iql",
+            "agent_state_dicts": {
+                str(agent.id): agent.model.value_network.state_dict() for agent in env.machine_agents
+            },
+            "target_state_dicts": {
+                str(agent.id): agent.model.target_network.state_dict() for agent in env.machine_agents
+            },
+        },
+        final_model_path,
+    )
     env.stop_simulation()
     clear_SUMO_files(os.path.join(records_folder, "SUMO_output"), episodes_folder, remove_additional_files=True)
     finish_runtime_tracking(runtime_tracker)

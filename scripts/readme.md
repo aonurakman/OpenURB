@@ -9,6 +9,8 @@ We provide training scripts for open vs. conditional switching variants:
 - `cond_open_qmix.py` is the QMIX variant with switching conditioned on group travel times.
 - `open_vdn.py` runs a VDN (Value Decomposition Networks) setup with open switching.
 - `cond_open_vdn.py` is the VDN variant with switching conditioned on group travel times.
+- `open_pimac.py` runs the PI-MAC setup with open switching (set-based teacher distillation for scalable team context).
+- `cond_open_pimac.py` is the PI-MAC variant with switching conditioned on group travel times (same teacher distillation).
 
 Baseline scripts are `open_baselines.py` and `cond_open_baselines.py` (see `baseline_models/readme.md`
 for available models). The open variants run dynamic switching (conditional in the `cond_` version)

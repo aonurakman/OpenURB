@@ -582,6 +582,20 @@ if __name__ == "__main__":
     losses_pd = pd.DataFrame([{"id": "qmix", "losses": qmix.loss}])
     losses_pd.to_csv(os.path.join(records_folder, "losses.csv"), index=False)
     save_mean_loss_plot(records_folder, {row["id"]: row["losses"] for row in losses_pd.to_dict("records")})
+    final_model_path = os.path.join(records_folder, "final_model.pt")
+    agent_state = qmix.agent_net.state_dict() if qmix.share_parameters else qmix.agent_nets.state_dict()
+    target_agent_state = qmix.target_agent_net.state_dict() if qmix.share_parameters else qmix.target_agent_nets.state_dict()
+    torch.save(
+        {
+            "algorithm": "qmix",
+            "share_parameters": qmix.share_parameters,
+            "agent_state_dict": agent_state,
+            "target_agent_state_dict": target_agent_state,
+            "mixing_state_dict": qmix.mixing_net.state_dict(),
+            "target_mixing_state_dict": qmix.target_mixing_net.state_dict(),
+        },
+        final_model_path,
+    )
     env.stop_simulation()
     clear_SUMO_files(os.path.join(records_folder, "SUMO_output"), episodes_folder, remove_additional_files=True)
     finish_runtime_tracking(runtime_tracker)
