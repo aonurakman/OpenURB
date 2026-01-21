@@ -1,22 +1,22 @@
 {
     "experiment": {
-        "id": "iql_ins_a1_e1_t1_42_42_repeated",
+        "id": "iql_ins_a1_e1_t1_42_42",
         "script": "open_iql.py",
         "alg_config": "config1",
-        "task_config": "dynamic1",
+        "task_config": "config1",
         "env_config": "config1"
     },
     "timing": {
-        "start_local": "2026-01-16 13:13:14 CET",
-        "end_local": "2026-01-16 16:52:54 CET",
-        "duration": "03:39:39.672"
+        "start_local": "2026-01-17 14:45:24 CET",
+        "end_local": "2026-01-17 22:16:33 CET",
+        "duration": "07:31:09.016"
     },
     "resources": {
-        "cpu_user_sec": 4931.324,
-        "cpu_system_sec": 1884.338,
-        "voluntary_context_switches": 347856157,
-        "involuntary_context_switches": 45326753,
-        "peak_memory_mb": 609.281,
-        "records_folder_size_mb": 118.241
+        "cpu_user_sec": 10087.578,
+        "cpu_system_sec": 3736.876,
+        "voluntary_context_switches": 656392933,
+        "involuntary_context_switches": 102520060,
+        "peak_memory_mb": 1031.047,
+        "records_folder_size_mb": 243.664
     }
 }

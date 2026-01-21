@@ -1,0 +1,22 @@
+{
+    "experiment": {
+        "id": "iql_ins_a8_e1_t1_42_42",
+        "script": "open_iql.py",
+        "alg_config": "config8",
+        "task_config": "config1",
+        "env_config": "config1"
+    },
+    "timing": {
+        "start_local": "2026-01-20 13:28:49 CET",
+        "end_local": "2026-01-20 20:43:20 CET",
+        "duration": "07:14:31.058"
+    },
+    "resources": {
+        "cpu_user_sec": 10127.866,
+        "cpu_system_sec": 3649.167,
+        "voluntary_context_switches": 655957689,
+        "involuntary_context_switches": 88750446,
+        "peak_memory_mb": 1011.219,
+        "records_folder_size_mb": 243.664
+    }
+}

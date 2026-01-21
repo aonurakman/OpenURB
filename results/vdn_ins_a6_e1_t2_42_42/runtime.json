@@ -1,0 +1,22 @@
+{
+    "experiment": {
+        "id": "vdn_ins_a6_e1_t2_42_42",
+        "script": "open_vdn.py",
+        "alg_config": "config6",
+        "task_config": "config2",
+        "env_config": "config1"
+    },
+    "timing": {
+        "start_local": "2026-01-20 09:52:15 CET",
+        "end_local": "2026-01-20 16:59:56 CET",
+        "duration": "07:07:40.505"
+    },
+    "resources": {
+        "cpu_user_sec": 10086.443,
+        "cpu_system_sec": 3710.807,
+        "voluntary_context_switches": 671242461,
+        "involuntary_context_switches": 105928980,
+        "peak_memory_mb": 1081.391,
+        "records_folder_size_mb": 228.707
+    }
+}

@@ -3,20 +3,20 @@
         "id": "ippo_ins_a3_e1_t1_42_42",
         "script": "open_ippo.py",
         "alg_config": "config3",
-        "task_config": "dynamic1",
+        "task_config": "config1",
         "env_config": "config1"
     },
     "timing": {
-        "start_local": "2026-01-07 16:06:01 CET",
-        "end_local": "2026-01-07 22:45:02 CET",
-        "duration": "06:39:01.111"
+        "start_local": "2026-01-18 05:32:42 CET",
+        "end_local": "2026-01-18 12:57:55 CET",
+        "duration": "07:25:12.973"
     },
     "resources": {
-        "cpu_user_sec": 4739.353,
-        "cpu_system_sec": 1999.278,
-        "voluntary_context_switches": 352926177,
-        "involuntary_context_switches": 48692274,
-        "peak_memory_mb": 417.812,
-        "records_folder_size_mb": 113.346
+        "cpu_user_sec": 9645.014,
+        "cpu_system_sec": 3733.38,
+        "voluntary_context_switches": 649918986,
+        "involuntary_context_switches": 110214155,
+        "peak_memory_mb": 787.391,
+        "records_folder_size_mb": 230.081
     }
 }
