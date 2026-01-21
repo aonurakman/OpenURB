@@ -145,10 +145,14 @@ def _infer_algorithm(script_path: Optional[Path], argv: list[str]) -> str:
     if script_path is None:
         return "exp"
     name = script_path.stem.lower()
+    if name.startswith("cond_open_"):
+        name = name[len("cond_open_") :]
+    elif name.startswith("open_"):
+        name = name[len("open_") :]
     if "baseline" in name:
         model = _get_flag_value(argv, "--model") or _get_flag_value(argv, "--algorithm")
         return model.lower() if model else "baseline"
-    for algo in ("iql", "ippo", "qmix"):
+    for algo in ("iql", "ippo", "qmix", "vdn"):
         if algo in name:
             return algo
     return name
