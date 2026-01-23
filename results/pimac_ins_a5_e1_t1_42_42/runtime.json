@@ -1,0 +1,22 @@
+{
+    "experiment": {
+        "id": "pimac_ins_a5_e1_t1_42_42",
+        "script": "open_pimac.py",
+        "alg_config": "config5",
+        "task_config": "config1",
+        "env_config": "config1"
+    },
+    "timing": {
+        "start_local": "2026-01-23 11:03:20 CET",
+        "end_local": "2026-01-23 20:05:14 CET",
+        "duration": "09:01:54.419"
+    },
+    "resources": {
+        "cpu_user_sec": 10087.417,
+        "cpu_system_sec": 3607.948,
+        "voluntary_context_switches": 702411761,
+        "involuntary_context_switches": 12976602,
+        "peak_memory_mb": 1013.281,
+        "records_folder_size_mb": 229.894
+    }
+}
