@@ -2,10 +2,11 @@
 This script implements the PI-MAC algorithm for reinforcement learning in a traffic environment.
 The experiment involves dynamic switching between human and autonomous vehicle (AV) agents with predefined transition probabilities.
 
-PI-MAC vs VDN/QMIX in this repo:
-- PI-MAC uses VDN-style mixing (sum/mean over active agents) and distills a permutation-invariant set teacher
-  into per-agent FiLM conditioning for scalable team composition context.
-- QMIX uses a learned mixing network that conditions on a centralized global state.
+PI-MAC in this repo is MAPPO-style:
+- Decentralized recurrent actor shared across AV agents.
+- Centralized critic with a permutation/size-invariant token teacher over active-agent observations.
+- Actor-side context distillation with heteroscedastic uncertainty and uncertainty-gated FiLM.
+- PPO training with clipped policy loss, value loss, entropy bonus, and GAE(λ).
 """
 
 import os
@@ -75,7 +76,7 @@ def extract_action_mask(observation, info, action_space_size):
     return obs, action_mask
 
 
-# Main script to run the VDN experiment
+# Main script to run the PI-MAC experiment
 if __name__ == "__main__":
     cl = " ".join(sys.argv)
     parser = argparse.ArgumentParser()
@@ -299,47 +300,38 @@ if __name__ == "__main__":
     agent_id_to_index = {agent_id: idx for idx, agent_id in enumerate(agent_id_list)}
 
     ######## Set policy for machine agents ########
-    # PI-MAC learner shared by all AVs. Like VDN, PI-MAC does not require a centralized global state.
+    # PI-MAC learner shared by all AVs (decentralized actor + centralized token teacher-critic).
     pimac = PIMAC(
         obs_size,
         action_space_size,
         num_agents=len(agent_id_list),
         device=device,
-        temp_init=temp_init,
-        temp_decay=temp_decay,
-        temp_min=temp_min,
         buffer_size=buffer_size,
         batch_size=batch_size,
         lr=lr,
-        teacher_lr=globals().get("teacher_lr", lr),
         num_epochs=num_epochs,
         num_hidden=num_hidden,
         widths=widths,
         rnn_hidden_dim=rnn_hidden_dim,
-        ctx_dim=globals().get("ctx_dim", 16),
-        num_tokens=globals().get("num_tokens", 8),
-        tok_dim=globals().get("tok_dim", globals().get("ctx_dim", 16)),
-        teacher_emb_dim=globals().get("teacher_emb_dim", 128),
-        teacher_hidden_sizes=globals().get("teacher_hidden_sizes", (128, 128)),
-        teacher_attn_dim=globals().get("teacher_attn_dim", None),
-        teacher_drop_prob=globals().get("teacher_drop_prob", 0.5),
-        distill_weight=globals().get("distill_weight", 1.0),
-        token_smooth_weight=globals().get("token_smooth_weight", 0.0),
+        clip_eps=clip_eps,
+        gae_lambda=gae_lambda,
+        normalize_advantage=normalize_advantage,
+        entropy_coef=entropy_coef,
+        value_coef=value_coef,
         max_grad_norm=max_grad_norm,
         gamma=gamma,
-        target_update_every=target_update_every,
-        double_q=double_q,
-        tau=tau,
         share_parameters=share_parameters,
-        q_tot_clip=q_tot_clip,
-        use_huber_loss=use_huber_loss,
-        normalize_by_active=globals().get("normalize_by_active", True),
-        obs_index_dim=globals().get("obs_index_dim", 3),
-        obs_skip=globals().get("obs_skip", False),
-        context_gate_reg=globals().get("context_gate_reg", 0.0),
-        subteam_samples=globals().get("subteam_samples", 0),
-        subteam_keep_prob=globals().get("subteam_keep_prob", 0.75),
-        subteam_td_weight=globals().get("subteam_td_weight", 0.5),
+        num_tokens=globals().get("num_tokens", 4),
+        tok_dim=globals().get("tok_dim", globals().get("ctx_dim", globals().get("set_embed_dim", 128))),
+        teacher_hidden_sizes=globals().get("teacher_hidden_sizes", globals().get("set_hidden_sizes", (128, 128))),
+        teacher_drop_prob=globals().get("teacher_drop_prob", 0.1),
+        teacher_ema_tau=globals().get("teacher_ema_tau", 0.01),
+        distill_weight=globals().get("distill_weight", 0.1),
+        ctx_logvar_min=globals().get("ctx_logvar_min", -6.0),
+        ctx_logvar_max=globals().get("ctx_logvar_max", 4.0),
+        set_embed_dim=globals().get("set_embed_dim", 128),
+        set_hidden_sizes=globals().get("set_hidden_sizes", (128, 128)),
+        critic_hidden_sizes=globals().get("critic_hidden_sizes", (128, 128)),
     )
 
     for agent in env.machine_agents:
@@ -357,7 +349,7 @@ if __name__ == "__main__":
     # - Learning treats the whole day as one joint decision problem over the current AV group:
     #     (obs_i, action_i) for each AV i  ->  rewards_i at end of day.
     #
-    # We therefore store one joint transition per day into VDN's replay buffer.
+    # We therefore store one joint transition per day into PI-MAC's on-policy buffer.
     pbar.set_description("AV learning")
     for episode in range(training_eps + dynamic_episodes):
         env.reset()
@@ -488,9 +480,9 @@ if __name__ == "__main__":
     ###############################
     ######## Testing phase ########
     ###############################
-    # Freeze exploration and run deterministic policy for evaluation.
-    pimac.temperature = 0.0
+    # Switch to deterministic evaluation actions.
     pimac.set_eval_mode()
+    pimac.deterministic = True
 
     pbar.set_description("Testing")
     for episode in range(test_eps):
@@ -513,17 +505,17 @@ if __name__ == "__main__":
     env.plot_results()
     losses_pd = pd.DataFrame([{"id": "pimac", "losses": pimac.loss}])
     losses_pd.to_csv(os.path.join(records_folder, "losses.csv"), index=False)
+    with open(os.path.join(records_folder, "pimac_loss_history.json"), "w", encoding="utf-8") as f:
+        json.dump(pimac.loss_history, f, indent=2)
     save_mean_loss_plot(records_folder, {row["id"]: row["losses"] for row in losses_pd.to_dict("records")})
     final_model_path = os.path.join(records_folder, "final_model.pt")
-    agent_state = pimac.agent_net.state_dict() if pimac.share_parameters else pimac.agent_nets.state_dict()
-    target_state = pimac.target_agent_net.state_dict() if pimac.share_parameters else pimac.target_agent_nets.state_dict()
+    actor_state = pimac.actor_net.state_dict() if pimac.share_parameters else pimac.actor_nets.state_dict()
     torch.save(
         {
             "algorithm": "pimac",
             "share_parameters": pimac.share_parameters,
-            "agent_state_dict": agent_state,
-            "target_agent_state_dict": target_state,
-            "teacher_state_dict": pimac.teacher.state_dict(),
+            "actor_state_dict": actor_state,
+            "critic_state_dict": pimac.critic.state_dict(),
         },
         final_model_path,
     )

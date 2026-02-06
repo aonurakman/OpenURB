@@ -9,88 +9,68 @@ import numpy as np
 import pytest
 import torch
 
-from algorithms.pimac import PIMACAgentRNN, PIMAC, SetTokenTeacher
+from algorithms.pimac import PIMAC, PIMACActorRNN, SetTokenTeacher
 
 
 def test_network_width_mismatch_raises():
     with pytest.raises(AssertionError):
-        PIMACAgentRNN(
+        PIMACActorRNN(
             obs_dim=3,
             action_dim=2,
             rnn_hidden_dim=8,
             num_hidden=1,
             widths=(8, 8, 4),
-            ctx_dim=4,
+            ctx_dim=8,
         )
 
 
-def test_teacher_tokens_permutation_invariant():
+def test_set_token_teacher_permutation_padding_and_context_equivariance():
     torch.manual_seed(0)
 
-    teacher = SetTokenTeacher(in_dim=4, num_tokens=4, tok_dim=8, ctx_dim=6)
+    teacher = SetTokenTeacher(obs_dim=4, tok_dim=8, num_tokens=3, teacher_hidden_sizes=(16, 16))
     teacher.eval()
 
-    obs = torch.randn(1, 2, 5, 4)
-    active_mask = torch.tensor([[[1, 1, 0, 1, 1], [1, 0, 1, 1, 1]]], dtype=torch.float32)
+    obs = torch.randn(1, 2, 4, 4)
+    active_mask = torch.tensor([[[1, 1, 0, 1], [1, 0, 1, 1]]], dtype=torch.float32)
 
-    tokens_a, _ = teacher(obs, active_mask=active_mask, pool_mask=active_mask)
+    tokens_a, ctx_a = teacher(obs, active_mask)
 
-    perm = torch.tensor([2, 0, 4, 1, 3])
+    perm = torch.tensor([2, 0, 3, 1])
+    inv_perm = torch.argsort(perm)
     obs_perm = obs[:, :, perm, :]
     mask_perm = active_mask[:, :, perm]
+    tokens_b, ctx_b = teacher(obs_perm, mask_perm)
 
-    tokens_b, _ = teacher(obs_perm, active_mask=mask_perm, pool_mask=mask_perm)
+    padded_obs = torch.cat([obs, torch.randn(1, 2, 2, 4)], dim=2)
+    padded_mask = torch.cat([active_mask, torch.zeros(1, 2, 2)], dim=2)
+    tokens_c, ctx_c = teacher(padded_obs, padded_mask)
+
+    # Token extraction should be invariant to agent reordering and inactive padding.
     assert torch.allclose(tokens_a, tokens_b, atol=1e-6)
+    assert torch.allclose(tokens_a, tokens_c, atol=1e-6)
+
+    # Per-agent teacher context should be permutation equivariant.
+    assert torch.allclose(ctx_a, ctx_b[:, :, inv_perm, :], atol=1e-6)
+    assert torch.allclose(ctx_a, ctx_c[:, :, : obs.shape[2], :], atol=1e-6)
+
+    # Added inactive padding slots should have zero context by construction.
+    assert torch.allclose(ctx_c[:, :, obs.shape[2] :, :], torch.zeros_like(ctx_c[:, :, obs.shape[2] :, :]), atol=1e-7)
 
 
-def test_agent_forward_without_identity_features():
-    torch.manual_seed(0)
+def test_set_token_teacher_all_inactive_is_finite():
+    torch.manual_seed(1)
+    teacher = SetTokenTeacher(obs_dim=3, tok_dim=6, num_tokens=2, teacher_hidden_sizes=(8, 8))
+    obs = torch.randn(2, 3, 5, 3)
+    mask = torch.zeros(2, 3, 5)
 
-    agent = PIMACAgentRNN(
-        obs_dim=5,
-        action_dim=3,
-        rnn_hidden_dim=8,
-        num_hidden=1,
-        widths=(8, 8),
-        ctx_dim=4,
-        obs_skip=True,
-        obs_index_dim=0,
-    )
-    obs = torch.randn(2, 1, 5)
-    q, hn, ctx, logvar = agent(obs)
+    tokens, ctx = teacher(obs, mask)
 
-    assert q.shape == (2, 1, 3)
-    assert ctx.shape == (2, 1, 4)
-    assert logvar.shape == (2, 1, 4)
-    assert hn.shape == (1, 2, 8)
+    assert torch.isfinite(tokens).all()
+    assert torch.isfinite(ctx).all()
+    assert torch.allclose(ctx, torch.zeros_like(ctx), atol=1e-7)
 
 
-def test_context_gate_can_zero_out_film():
-    torch.manual_seed(0)
-
-    agent = PIMACAgentRNN(
-        obs_dim=4,
-        action_dim=2,
-        rnn_hidden_dim=8,
-        num_hidden=1,
-        widths=(8, 8),
-        ctx_dim=4,
-        obs_skip=False,
-        obs_index_dim=0,
-    )
-    obs = torch.randn(1, 1, 4)
-
-    with torch.no_grad():
-        agent.logvar_head.weight.zero_()
-        agent.logvar_head.bias.fill_(20.0)
-        q_a, _, _, _ = agent(obs)
-        agent.ctx_head.bias.add_(5.0)
-        q_b, _, _, _ = agent(obs)
-
-    assert torch.allclose(q_a, q_b, atol=1e-6)
-
-
-def test_act_respects_action_mask_when_exploiting():
+def test_act_respects_action_mask_when_deterministic():
     np.random.seed(0)
     torch.manual_seed(0)
 
@@ -98,46 +78,29 @@ def test_act_respects_action_mask_when_exploiting():
         state_size=3,
         action_space_size=4,
         num_agents=1,
-        temp_init=0.0,
-        temp_decay=1.0,
-        temp_min=0.0,
         buffer_size=8,
         batch_size=2,
         lr=0.01,
-        teacher_lr=0.01,
         num_epochs=1,
         num_hidden=1,
         widths=(8, 8),
         rnn_hidden_dim=8,
-        ctx_dim=4,
-        num_tokens=4,
-        tok_dim=4,
         share_parameters=True,
-        normalize_by_active=True,
-        distill_weight=0.0,
-        token_smooth_weight=0.0,
+        tok_dim=8,
     )
     pimac.reset_episode()
+    pimac.deterministic = True
 
     with torch.no_grad():
-        pimac.agent_net.input_layer.weight.zero_()
-        pimac.agent_net.input_layer.bias.zero_()
-        for layer in pimac.agent_net.hidden_layers:
+        pimac.actor_net.input_layer.weight.zero_()
+        pimac.actor_net.input_layer.bias.zero_()
+        for layer in pimac.actor_net.hidden_layers:
             layer.weight.zero_()
             layer.bias.zero_()
-        for p in pimac.agent_net.rnn.parameters():
+        for p in pimac.actor_net.rnn.parameters():
             p.zero_()
-        pimac.agent_net.ctx_head.weight.zero_()
-        pimac.agent_net.ctx_head.bias.zero_()
-        pimac.agent_net.logvar_head.weight.zero_()
-        pimac.agent_net.logvar_head.bias.zero_()
-        pimac.agent_net.film.weight.zero_()
-        pimac.agent_net.film.bias.zero_()
-        if pimac.agent_net.index_proj is not None:
-            pimac.agent_net.index_proj.weight.zero_()
-            pimac.agent_net.index_proj.bias.zero_()
-        pimac.agent_net.out.weight.zero_()
-        pimac.agent_net.out.bias.copy_(torch.tensor([0.0, 1.0, 2.0, 3.0]))
+        pimac.actor_net.policy_head.weight.zero_()
+        pimac.actor_net.policy_head.bias.copy_(torch.tensor([0.0, 1.0, 2.0, 3.0]))
 
     obs = np.array([0.1, -0.2, 0.3], dtype=np.float32)
     action_mask = np.array([1, 1, 1, 0], dtype=np.int8)
@@ -145,98 +108,122 @@ def test_act_respects_action_mask_when_exploiting():
     assert action == 2
 
 
-def test_vdn_mixing_is_linear_and_gradients_match_mask():
-    torch.manual_seed(0)
+def test_gae_matches_manual_recursion():
+    pimac = PIMAC(state_size=2, action_space_size=2, num_agents=2, gamma=0.9, gae_lambda=0.8)
 
-    pimac = PIMAC(state_size=2, action_space_size=2, num_agents=4, normalize_by_active=True)
-    chosen_q = torch.randn(2, 3, 4, requires_grad=True)
-    active_mask = torch.tensor(
-        [
-            [[1, 1, 0, 0], [1, 0, 1, 0], [0, 1, 1, 1]],
-            [[1, 0, 0, 0], [1, 1, 1, 0], [0, 0, 1, 1]],
-        ],
-        dtype=torch.float32,
-    )
+    rewards = np.array([1.0, 2.0], dtype=np.float32)
+    values = np.array([0.5, 0.2], dtype=np.float32)
+    next_values = np.array([0.2, 0.0], dtype=np.float32)
+    dones = np.array([0.0, 1.0], dtype=np.float32)
 
-    q_tot = pimac._mix_q_tot(chosen_q, active_mask)
-    q_tot.sum().backward()
+    adv, ret = pimac._compute_gae(rewards, values, next_values, dones)
 
-    expected = active_mask / active_mask.sum(dim=2, keepdim=True).clamp(min=1.0)
-    assert chosen_q.grad is not None
-    assert torch.allclose(chosen_q.grad, expected, atol=1e-6)
+    d1 = rewards[1] + 0.9 * (1.0 - dones[1]) * next_values[1] - values[1]
+    a1 = d1
+    d0 = rewards[0] + 0.9 * (1.0 - dones[0]) * next_values[0] - values[0]
+    a0 = d0 + 0.9 * 0.8 * (1.0 - dones[0]) * a1
+
+    expected_adv = np.array([a0, a1], dtype=np.float32)
+    expected_ret = expected_adv + values
+
+    np.testing.assert_allclose(adv, expected_adv, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(ret, expected_ret, rtol=1e-6, atol=1e-6)
 
 
-def test_learn_updates_parameters_and_decays_temperature():
+def test_store_episode_finalization_contains_ppo_fields():
     np.random.seed(1)
     torch.manual_seed(1)
+
+    pimac = PIMAC(state_size=4, action_space_size=3, num_agents=3, buffer_size=8, batch_size=1)
+
+    obs = np.random.randn(3, 4).astype(np.float32)
+    actions = np.array([0, 1, 2], dtype=np.int64)
+    rewards = np.array([1.0, 0.5, -0.25], dtype=np.float32)
+    active = np.ones(3, dtype=np.float32)
+
+    pimac.store_episode(obs, actions, rewards, active)
+
+    assert len(pimac.memory) == 1
+    ep = pimac.memory[0]
+    assert ep["old_log_probs"].shape == (1, 3)
+    assert ep["advantages"].shape == (1,)
+    assert ep["returns"].shape == (1,)
+
+
+def test_learn_updates_parameters_and_logs_vnext_metrics():
+    np.random.seed(2)
+    torch.manual_seed(2)
 
     pimac = PIMAC(
         state_size=3,
         action_space_size=2,
         num_agents=2,
-        temp_init=0.9,
-        temp_decay=0.5,
-        temp_min=0.0,
         buffer_size=16,
         batch_size=2,
         lr=0.01,
-        teacher_lr=0.01,
-        num_epochs=1,
+        num_epochs=2,
         num_hidden=1,
-        widths=(8, 8),
-        rnn_hidden_dim=8,
-        ctx_dim=4,
-        num_tokens=4,
-        tok_dim=4,
-        target_update_every=10,
-        double_q=True,
-        tau=1.0,
-        share_parameters=True,
-        normalize_by_active=True,
-        distill_weight=0.0,
-        token_smooth_weight=0.0,
+        widths=(16, 16),
+        rnn_hidden_dim=16,
+        num_tokens=3,
+        tok_dim=16,
+        teacher_hidden_sizes=(16, 16),
+        teacher_drop_prob=0.2,
+        teacher_ema_tau=0.05,
+        distill_weight=0.1,
+        critic_hidden_sizes=(16, 16),
     )
 
-    with torch.no_grad():
-        pimac.agent_net.input_layer.weight.zero_()
-        pimac.agent_net.input_layer.bias.zero_()
-        for layer in pimac.agent_net.hidden_layers:
-            layer.weight.zero_()
-            layer.bias.zero_()
-        for p in pimac.agent_net.rnn.parameters():
-            p.zero_()
-        pimac.agent_net.ctx_head.weight.zero_()
-        pimac.agent_net.ctx_head.bias.zero_()
-        pimac.agent_net.logvar_head.weight.zero_()
-        pimac.agent_net.logvar_head.bias.zero_()
-        pimac.agent_net.film.weight.zero_()
-        pimac.agent_net.film.bias.zero_()
-        if pimac.agent_net.index_proj is not None:
-            pimac.agent_net.index_proj.weight.zero_()
-            pimac.agent_net.index_proj.bias.zero_()
-        pimac.agent_net.out.weight.zero_()
-        pimac.agent_net.out.bias.zero_()
-
-    obs_batch = np.zeros((2, 3), dtype=np.float32)
-    actions_batch = np.array([0, 1], dtype=np.int64)
-    rewards_batch = np.array([1.0, 1.0], dtype=np.float32)
-    active_mask = np.array([1.0, 1.0], dtype=np.float32)
-
     for _ in range(2):
+        obs_batch = np.random.randn(2, 3).astype(np.float32)
+        actions_batch = np.array([0, 1], dtype=np.int64)
+        rewards_batch = np.array([1.0, -0.5], dtype=np.float32)
+        active_mask = np.array([1.0, 1.0], dtype=np.float32)
         pimac.store_episode(obs_batch, actions_batch, rewards_batch, active_mask)
 
-    temp_before = pimac.temperature
-    bias_before = pimac.agent_net.out.bias.detach().clone()
+    before_params = [p.detach().clone() for p in pimac.actor_net.parameters()]
+    assert len(pimac.memory) == 2
+
     pimac.learn()
 
+    after_params = [p.detach() for p in pimac.actor_net.parameters()]
+    changed = any(not torch.allclose(p0, p1) for p0, p1 in zip(before_params, after_params))
+
     assert len(pimac.loss) == 1
-    assert pimac.temperature == pytest.approx(temp_before * pimac.temp_decay)
-    assert not torch.allclose(pimac.agent_net.out.bias, bias_before)
+    assert changed
+    assert len(pimac.memory) == 0
+    assert len(pimac.loss_history) >= 1
+
+    last = pimac.loss_history[-1]
+    expected_keys = {
+        "policy_loss",
+        "value_loss",
+        "entropy",
+        "total_loss",
+        "approx_kl",
+        "clip_frac",
+        "explained_variance",
+        "distill_loss",
+        "distill_mse",
+        "ctx_logvar_mean",
+        "ctx_logvar_std",
+        "gate_mean",
+        "gate_std",
+        "token_norm_mean",
+        "teacher_ctx_norm_mean",
+        "ctx_consistency_l2",
+        "active_decisions",
+        "active_agents_mean",
+    }
+    assert expected_keys.issubset(last.keys())
+    assert last["active_decisions"] > 0
+    for key in expected_keys:
+        assert np.isfinite(float(last[key]))
 
 
 def test_variable_n_batching_smoke():
-    np.random.seed(2)
-    torch.manual_seed(2)
+    np.random.seed(3)
+    torch.manual_seed(3)
 
     pimac = PIMAC(
         state_size=4,
@@ -246,13 +233,13 @@ def test_variable_n_batching_smoke():
         batch_size=2,
         num_epochs=1,
         lr=1e-3,
-        teacher_lr=1e-3,
         num_hidden=1,
         widths=(16, 16),
         rnn_hidden_dim=16,
-        ctx_dim=8,
-        num_tokens=4,
-        tok_dim=8,
+        num_tokens=3,
+        tok_dim=16,
+        teacher_hidden_sizes=(16, 16),
+        critic_hidden_sizes=(16, 16),
         share_parameters=True,
     )
 
@@ -271,40 +258,12 @@ def test_variable_n_batching_smoke():
 
     pimac.learn()
     assert len(pimac.loss) == 1
-
-
-def test_distill_loss_matches_legacy_formula():
-    torch.manual_seed(6)
-
-    pimac = PIMAC(
-        state_size=3,
-        action_space_size=2,
-        num_agents=2,
-        distill_weight=1.0,
-        token_smooth_weight=0.0,
-    )
-
-    ctx_pred = torch.randn(2, 1, 3, 4)
-    logvar_pred = torch.randn(2, 1, 3, 4)
-    teacher_ctx = torch.randn(2, 1, 3, 4)
-    active_mask = torch.ones(2, 1, 3)
-    time_mask = torch.ones(2, 1)
-
-    loss = pimac._distill_loss(ctx_pred, logvar_pred, teacher_ctx, active_mask, time_mask)
-
-    logvar = torch.clamp(logvar_pred, min=-10.0, max=10.0)
-    err = (ctx_pred - teacher_ctx).pow(2)
-    per = (torch.exp(-logvar) * err + logvar).mean(dim=-1)
-    weights = active_mask * time_mask.unsqueeze(-1)
-    denom = weights.sum().clamp(min=1.0)
-    expected = (per * weights).sum() / denom
-
-    assert torch.allclose(loss, expected)
+    assert len(pimac.memory) == 0
 
 
 def test_parallel_api_smoke():
-    np.random.seed(3)
-    torch.manual_seed(3)
+    np.random.seed(4)
+    torch.manual_seed(4)
 
     pimac = PIMAC(state_size=3, action_space_size=4, num_agents=5, share_parameters=True)
     obs_dict = {f"agent_{i}": np.random.randn(3).astype(np.float32) for i in range(5)}
@@ -314,8 +273,8 @@ def test_parallel_api_smoke():
 
 
 def test_aec_cycle_storage_smoke():
-    np.random.seed(4)
-    torch.manual_seed(4)
+    np.random.seed(5)
+    torch.manual_seed(5)
 
     pimac = PIMAC(state_size=3, action_space_size=4, num_agents=3, buffer_size=8, batch_size=1)
     agent_ids = ["a", "b", "c"]

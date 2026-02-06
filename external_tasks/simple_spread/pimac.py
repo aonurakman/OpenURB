@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if repo_root not in sys.path:
@@ -29,7 +30,6 @@ def main():
     seed = 42
     episodes = 15000
     learning_starts = 2000
-    learn_every_steps = 4
     eval_every_episodes = 200
     eval_episodes = 10
     min_improve = 1e-3
@@ -48,41 +48,32 @@ def main():
     action_space_size = env.action_space(agent_ids[0]).n
 
     pimac_kwargs = dict(
-        temp_init=1.0,
-        temp_decay=0.999,
-        temp_min=0.05,
         buffer_size=200_000,
         batch_size=64,
         lr=1e-4,
-        teacher_lr=1e-4,
-        num_epochs=1,
+        num_epochs=4,
         num_hidden=2,
         widths=(128, 128, 128),
         rnn_hidden_dim=64,
-        ctx_dim=16,
-        num_tokens=8,
-        tok_dim=16,
-        teacher_emb_dim=64,
-        teacher_hidden_sizes=(64, 64),
-        teacher_attn_dim=None,
-        teacher_drop_prob=0.5,
-        distill_weight=0.5,
-        token_smooth_weight=0.0,
-        obs_index_dim=0,
-        obs_skip=True,
-        context_gate_reg=0.001,
-        subteam_samples=0,
-        subteam_keep_prob=0.75,
-        subteam_td_weight=0.25,
+        clip_eps=0.2,
+        gae_lambda=0.95,
+        normalize_advantage=True,
+        entropy_coef=0.01,
+        value_coef=0.5,
         max_grad_norm=5.0,
         gamma=0.99,
-        target_update_every=200,
-        double_q=True,
-        tau=1.0,
+        num_tokens=4,
+        tok_dim=64,
+        teacher_hidden_sizes=(64, 64),
+        teacher_drop_prob=0.1,
+        teacher_ema_tau=0.01,
+        distill_weight=0.1,
+        ctx_logvar_min=-6.0,
+        ctx_logvar_max=4.0,
+        set_embed_dim=64,
+        set_hidden_sizes=(64, 64),
+        critic_hidden_sizes=(64, 64),
         share_parameters=True,
-        q_tot_clip=None,
-        use_huber_loss=True,
-        normalize_by_active=True,
     )
     pimac = PIMAC(obs_size, action_space_size, num_agents=n_agents, device=device, **pimac_kwargs)
 
@@ -99,9 +90,9 @@ def main():
         return obs_batch.reshape(-1).astype(np.float32, copy=False)
 
     def run_eval(start_seed: int) -> float:
-        temp_backup = pimac.temperature
-        pimac.temperature = 0.0
+        det_backup = pimac.deterministic
         pimac.set_eval_mode()
+        pimac.deterministic = True
 
         returns = []
         for k in range(eval_episodes):
@@ -128,7 +119,7 @@ def main():
                     break
             returns.append(total / n_agents)
 
-        pimac.temperature = temp_backup
+        pimac.deterministic = det_backup
         pimac.set_train_mode()
         return float(np.mean(returns))
 
@@ -199,14 +190,14 @@ def main():
                 done=done,
             )
 
-            if (global_step >= learning_starts) and ((global_step % learn_every_steps) == 0):
-                pimac.learn()
-
             obs = next_obs
             term = {k: bool(v) for k, v in terminations.items()}
             trunc = {k: bool(v) for k, v in truncations.items()}
             if done:
                 break
+
+        if (global_step >= learning_starts) and (len(pimac.memory) >= pimac.batch_size):
+            pimac.learn()
 
         new_losses = pimac.loss[loss_start:]
         ep_loss = float(np.mean(new_losses)) if new_losses else 0.0
@@ -223,10 +214,10 @@ def main():
                         "env_name": "simple_spread_v3",
                         "seed": seed,
                         "pimac_kwargs": pimac_kwargs,
-                        "agent_state_dict": (
-                            pimac.agent_net.state_dict() if pimac.share_parameters else pimac.agent_nets.state_dict()
+                        "actor_state_dict": (
+                            pimac.actor_net.state_dict() if pimac.share_parameters else pimac.actor_nets.state_dict()
                         ),
-                        "teacher_state_dict": pimac.teacher.state_dict(),
+                        "critic_state_dict": pimac.critic.state_dict(),
                     },
                     best_ckpt_path,
                 )
@@ -241,28 +232,28 @@ def main():
             )
             print(
                 f"[{ep+1}/{episodes}] train_reward={episode_rewards[-1]:.3f} "
-                f"loss={episode_losses[-1]:.5f} temp={pimac.temperature:.3f}"
+                f"loss={episode_losses[-1]:.5f}"
             )
 
     plot_curves(os.path.join(out_dir, "learning_curves.png"), episode_rewards, episode_losses, eval_rewards, window=50)
     np.save(os.path.join(out_dir, "episode_rewards.npy"), np.asarray(episode_rewards, dtype=np.float32))
     np.save(os.path.join(out_dir, "episode_losses.npy"), np.asarray(episode_losses, dtype=np.float32))
     np.save(os.path.join(out_dir, "eval_rewards.npy"), np.asarray(eval_rewards, dtype=np.float32))
+    with open(os.path.join(out_dir, "pimac_loss_history.json"), "w", encoding="utf-8") as f:
+        json.dump(pimac.loss_history, f, indent=2)
     env.close()
     print(f"Saved results to {out_dir}")
 
     if os.path.exists(best_ckpt_path):
         ckpt = torch.load(best_ckpt_path, map_location="cpu")
         if pimac.share_parameters:
-            pimac.agent_net.load_state_dict(ckpt["agent_state_dict"])
-            pimac.target_agent_net.load_state_dict(ckpt["agent_state_dict"])
+            pimac.actor_net.load_state_dict(ckpt["actor_state_dict"])
         else:
-            pimac.agent_nets.load_state_dict(ckpt["agent_state_dict"])
-            pimac.target_agent_nets.load_state_dict(ckpt["agent_state_dict"])
-        pimac.teacher.load_state_dict(ckpt["teacher_state_dict"])
+            pimac.actor_nets.load_state_dict(ckpt["actor_state_dict"])
+        pimac.critic.load_state_dict(ckpt["critic_state_dict"])
 
-    pimac.temperature = 0.0
     pimac.set_eval_mode()
+    pimac.deterministic = True
 
     env_viz = make_env(seed=seed + 200_000, render_mode="rgb_array")
     frames = []

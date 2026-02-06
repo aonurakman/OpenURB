@@ -155,15 +155,11 @@ python scripts/open_baselines.py --id ing_aon --alg-conf config1 --task-conf con
 
 We provide training scripts for open vs. conditional switching variants:
 - `open_ippo.py` runs a simplified IPPO/PPO setup with open (predefined) switching.
-- `cond_open_ippo.py` is the IPPO variant with switching conditioned on group travel times.
 - `open_iql.py` runs an IQL setup with open switching.
-- `cond_open_iql.py` is the conditional-switching version of the IQL setup.
 - `open_qmix.py` runs a QMIX setup with open switching.
-- `cond_open_qmix.py` is the QMIX variant with switching conditioned on group travel times.
 - `open_vdn.py` runs a VDN (Value Decomposition Networks) setup with open switching.
-- `cond_open_vdn.py` is the VDN variant with switching conditioned on group travel times.
-- `open_pimac.py` runs the PI-MAC setup with open switching (set-based teacher distillation for scalable team context).
-- `cond_open_pimac.py` is the PI-MAC variant with switching conditioned on group travel times (same teacher distillation).
+- `open_pimac.py` runs PI-MAC setup with open switching.
+- `cond_` prepend signifies dynamic switching probabilities based on group travel time ratio.
 
 Baseline scripts are `open_baselines.py` and `cond_open_baselines.py` (see `baseline_models/readme.md`
 for available models). The open variants run dynamic switching (conditional in the `cond_` version)
@@ -171,6 +167,9 @@ and require task configs from `config/task_config/`.
 
 All scripts automatically run `analysis/metrics.py` at the end of an experiment to generate KPI outputs
 in the experiment's `results/<exp_id>/metrics/` folder.
+
+PI-MAC scripts additionally persist per-update optimization diagnostics to
+`results/<exp_id>/pimac_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
 
 ### Weights & Biases logging
 
@@ -205,10 +204,12 @@ algorithms in `algorithms/` can learn on small **multi-step** environments.
 Outputs are written under `external_tasks/runs/<env>/<algo>/<timestamp>/`:
 - `learning_curves.png`
 - `episode_rewards.npy`, `episode_losses.npy`, `eval_rewards.npy`
+- `pimac_loss_history.json` (for PI-MAC runs; rich per-update diagnostics)
 - `best_checkpoint.pt` (best eval reward)
 - `policy_rollout.gif` (rollout of the best checkpoint; always headless)
 
-PI-MAC sanity scripts use the set-based teacher distillation from `algorithms/pimac.py` (no autoencoders).
+PI-MAC sanity scripts use the v-next MAPPO-style actor plus token teacher-critic, heteroscedastic distillation,
+and uncertainty-gated FiLM from `algorithms/pimac.py`.
 
 ### Environments
 

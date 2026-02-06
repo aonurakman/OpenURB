@@ -1,13 +1,9 @@
 {
     "training_eps": 2000,
     "share_parameters": true,
-    "temp_init": 1.5,
-    "temp_decay": 0.999,
-    "temp_min": 0.2,
     "buffer_size": 2048,
     "batch_size": 32,
     "lr": 0.0005,
-    "teacher_lr": 0.0005,
     "num_epochs": 2,
     "num_hidden": 2,
     "widths": [
@@ -16,31 +12,32 @@
         192
     ],
     "rnn_hidden_dim": 192,
-    "ctx_dim": 48,
-    "num_tokens": 16,
-    "tok_dim": 48,
-    "teacher_emb_dim": 192,
+    "num_tokens": 4,
+    "tok_dim": 192,
     "teacher_hidden_sizes": [
         192,
         192
     ],
-    "teacher_attn_dim": null,
-    "teacher_drop_prob": 0.6,
-    "distill_weight": 0.6,
-    "token_smooth_weight": 0.05,
-    "obs_index_dim": 3,
-    "obs_skip": true,
-    "context_gate_reg": 0.001,
+    "teacher_drop_prob": 0.1,
+    "teacher_ema_tau": 0.01,
+    "distill_weight": 0.1,
+    "ctx_logvar_min": -6.0,
+    "ctx_logvar_max": 4.0,
+    "set_embed_dim": 192,
+    "set_hidden_sizes": [
+        192,
+        192
+    ],
+    "critic_hidden_sizes": [
+        192,
+        192
+    ],
+    "clip_eps": 0.2,
+    "gae_lambda": 0.95,
+    "normalize_advantage": true,
+    "entropy_coef": 0.01,
+    "value_coef": 0.6,
     "max_grad_norm": 10.0,
     "update_every": 2,
-    "gamma": 0.99,
-    "target_update_every": 200,
-    "double_q": true,
-    "tau": 1.0,
-    "q_tot_clip": null,
-    "use_huber_loss": true,
-    "normalize_by_active": true,
-    "subteam_samples": 2,
-    "subteam_keep_prob": 0.7,
-    "subteam_td_weight": 0.25
+    "gamma": 0.99
 }

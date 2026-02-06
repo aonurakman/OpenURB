@@ -1,12 +1,17 @@
 """
 PI-MAC (pimac) implementation for OpenURB.
 
-High-level idea (as implemented here):
-- Base learner is VDN-style value factorization with recurrent per-agent Q networks.
-- Each agent predicts a distilled context from its local observation history and uses FiLM conditioning.
-- A permutation-invariant set teacher produces global tokens and per-agent teacher context for distillation.
-- Training is CTDE; execution is decentralized (local observation only).
-- Supports variable team sizes via padding and masks.
+This file implements a MAPPO-style learner with a token-teacher critic:
+- Decentralized actor policy pi(a|o) with shared parameters by default.
+- Centralized value critic trained through a set teacher that builds K coordination
+  tokens from active-agent observations via cross-attention.
+- Actor-side context distillation from teacher per-agent context using
+  heteroscedastic Gaussian NLL.
+- Uncertainty-gated FiLM conditioning inside the actor policy head.
+- PPO clipped objective + GAE(lambda) + entropy regularization.
+
+Execution remains decentralized (`act` uses only one agent's observation).
+Training uses centralized set context only inside critic/teacher paths.
 """
 
 from __future__ import annotations
@@ -20,15 +25,15 @@ from typing import Optional, Sequence
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 
 from baseline_models import BaseLearningModel
 
-__all__ = ["PIMACAgentRNN", "SetTokenTeacher", "PIMAC"]
+__all__ = ["PIMACActorRNN", "DeepSetEncoder", "SetTokenTeacher", "SetValueCritic", "PIMAC"]
 
 
 def _build_mlp(in_dim: int, hidden_sizes: Sequence[int], out_dim: int) -> nn.Sequential:
+    """Build a simple ReLU MLP."""
     layers: list[nn.Module] = []
     last = int(in_dim)
     for h in hidden_sizes:
@@ -40,29 +45,31 @@ def _build_mlp(in_dim: int, hidden_sizes: Sequence[int], out_dim: int) -> nn.Seq
 
 
 def _sorted_agent_ids(keys) -> list:
+    """Stable key ordering helper used by parallel/AEC convenience APIs."""
     return sorted(list(keys), key=lambda x: str(x))
 
 
-class PIMACAgentRNN(nn.Module):
-    """Per-agent recurrent Q-network with distilled context FiLM conditioning."""
+class PIMACActorRNN(nn.Module):
+    """
+    Per-agent recurrent actor: local observation history -> action logits.
+
+    The actor additionally predicts context mean/log-variance for distillation and
+    uses uncertainty-gated FiLM to modulate policy features.
+    """
 
     def __init__(
         self,
         obs_dim: int,
         action_dim: int,
-        rnn_hidden_dim: int,
         num_hidden: int,
         widths: Sequence[int],
+        rnn_hidden_dim: int,
         ctx_dim: int,
-        obs_skip: bool = False,
-        obs_index_dim: int = 3,
+        ctx_logvar_min: float = -6.0,
+        ctx_logvar_max: float = 4.0,
     ):
         super().__init__()
-        assert len(widths) == (int(num_hidden) + 1), "PI-MAC widths and number of layers mismatch!"
-
-        self.obs_dim = int(obs_dim)
-        self.action_dim = int(action_dim)
-        self.ctx_dim = int(ctx_dim)
+        assert len(widths) == (int(num_hidden) + 1), "PI-MAC actor widths and layer count mismatch."
 
         self.input_layer = nn.Linear(int(obs_dim), int(widths[0]))
         self.hidden_layers = nn.ModuleList(
@@ -70,21 +77,19 @@ class PIMACAgentRNN(nn.Module):
         )
         self.rnn = nn.GRU(input_size=int(widths[-1]), hidden_size=int(rnn_hidden_dim), batch_first=True)
 
-        # Distilled context heads from recurrent state.
-        self.ctx_head = nn.Linear(int(rnn_hidden_dim), int(ctx_dim))
-        self.logvar_head = nn.Linear(int(rnn_hidden_dim), int(ctx_dim))
-        self.film = nn.Linear(int(ctx_dim), int(2 * rnn_hidden_dim))
+        hidden_dim = int(rnn_hidden_dim)
+        self.ctx_mu_head = nn.Linear(hidden_dim, int(ctx_dim))
+        self.ctx_logvar_head = nn.Linear(hidden_dim, int(ctx_dim))
+        self.film_head = nn.Linear(int(ctx_dim), 2 * hidden_dim)
 
-        self.obs_skip = nn.Linear(int(obs_dim), int(rnn_hidden_dim)) if obs_skip else None
+        # Scalar uncertainty gate: g = sigmoid(w * (-mean(logvar)) + b)
+        self.gate_weight = nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
+        self.gate_bias = nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
 
-        # Residual conditioning from observation indices (static role/task features).
-        effective_index_dim = min(int(obs_index_dim), int(obs_dim))
-        self.obs_index_dim = max(0, int(effective_index_dim))
-        self.index_proj = None
-        if self.obs_index_dim > 0:
-            self.index_proj = nn.Linear(int(self.obs_index_dim), int(rnn_hidden_dim))
+        self.policy_head = nn.Linear(hidden_dim, int(action_dim))
 
-        self.out = nn.Linear(int(rnn_hidden_dim), int(action_dim))
+        self.ctx_logvar_min = float(ctx_logvar_min)
+        self.ctx_logvar_max = float(ctx_logvar_max)
 
     def _encode(self, x: torch.Tensor) -> torch.Tensor:
         x = torch.relu(self.input_layer(x))
@@ -92,94 +97,188 @@ class PIMACAgentRNN(nn.Module):
             x = torch.relu(layer(x))
         return x
 
-    def forward(self, obs_seq: torch.Tensor, h0: Optional[torch.Tensor] = None):
-        # obs_seq: [B, T, obs_dim]
+    def forward(self, obs_seq: torch.Tensor, h0: Optional[torch.Tensor] = None, return_aux: bool = False):
+        """
+        Args:
+            obs_seq: [B, T, obs_dim]
+            h0: optional GRU hidden [1, B, H]
+            return_aux: include distillation/FiLM outputs when True.
+
+        Returns:
+            logits: [B, T, action_dim]
+            hn: [1, B, H]
+            aux (optional): dict with
+                - ctx_mu: [B, T, ctx_dim]
+                - ctx_logvar: [B, T, ctx_dim]
+                - gate: [B, T, 1]
+        """
         b, t, d = obs_seq.shape
         x = self._encode(obs_seq.reshape(b * t, d)).reshape(b, t, -1)
-        out, hn = self.rnn(x, h0)  # out: [B, T, H]
+        h, hn = self.rnn(x, h0)
 
-        ctx_pred = self.ctx_head(out)  # [B, T, ctx_dim]
-        logvar_pred = self.logvar_head(out)  # [B, T, ctx_dim]
+        ctx_mu = self.ctx_mu_head(h)
+        ctx_logvar = torch.clamp(self.ctx_logvar_head(h), min=self.ctx_logvar_min, max=self.ctx_logvar_max)
 
-        h = out
-        if self.obs_skip is not None:
-            h = h + self.obs_skip(obs_seq)
-        if self.index_proj is not None:
-            idx = obs_seq[:, :, -self.obs_index_dim :]  # [B, T, K]
-            h = h + self.index_proj(idx)
-
-        gamma_beta = self.film(ctx_pred)
+        gamma_beta = self.film_head(ctx_mu)
         gamma, beta = torch.chunk(gamma_beta, 2, dim=-1)
-        gate = torch.sigmoid(-logvar_pred.mean(dim=-1, keepdim=True))
-        gate = torch.clamp(gate, min=0.0, max=1.0)
-        h_film = (1.0 + gate * gamma) * h + gate * beta
 
-        q = self.out(h_film)  # [B, T, A]
-        return q, hn, ctx_pred, logvar_pred
+        uncertainty = ctx_logvar.mean(dim=-1, keepdim=True)
+        gate = torch.sigmoid(self.gate_weight * (-uncertainty) + self.gate_bias)
+
+        h_mod = h * (1.0 + gate * gamma) + gate * beta
+        logits = self.policy_head(h_mod)
+
+        if not return_aux:
+            return logits, hn
+
+        return logits, hn, {"ctx_mu": ctx_mu, "ctx_logvar": ctx_logvar, "gate": gate}
 
 
-class SetTokenTeacher(nn.Module):
-    """Permutation-invariant set teacher producing global tokens and per-agent context."""
+class DeepSetEncoder(nn.Module):
+    """
+    Legacy DeepSets encoder kept for compatibility.
+
+    Input:
+        obs: [B, T, N, obs_dim]
+        active_mask: [B, T, N] (0/1)
+
+    Output:
+        context: [B, T, set_embed_dim]
+    """
 
     def __init__(
         self,
-        in_dim: int,
-        num_tokens: int,
-        tok_dim: int,
-        ctx_dim: int,
-        emb_dim: int = 128,
-        hidden_sizes: Sequence[int] = (128, 128),
-        attn_dim: Optional[int] = None,
+        obs_dim: int,
+        set_embed_dim: int,
+        set_hidden_sizes: Sequence[int] = (128, 128),
     ):
         super().__init__()
-        self.in_dim = int(in_dim)
-        self.num_tokens = int(num_tokens)
-        self.tok_dim = int(tok_dim)
-        self.ctx_dim = int(ctx_dim)
-        self.emb_dim = int(emb_dim)
-        self.attn_dim = int(attn_dim) if attn_dim is not None else int(tok_dim)
+        self.obs_dim = int(obs_dim)
+        self.set_embed_dim = int(set_embed_dim)
+        self.agent_mlp = _build_mlp(self.obs_dim, set_hidden_sizes, self.set_embed_dim)
 
-        self.agent_mlp = _build_mlp(self.in_dim, hidden_sizes, self.emb_dim)
-        self.token_mlp = _build_mlp(self.emb_dim, hidden_sizes, self.num_tokens * self.tok_dim)
+    def forward(self, obs: torch.Tensor, active_mask: torch.Tensor) -> torch.Tensor:
+        b, t, n, d = obs.shape
+        emb = self.agent_mlp(obs.reshape(b * t * n, d)).reshape(b, t, n, -1)
 
-        self.q_proj = nn.Linear(self.emb_dim, self.attn_dim)
-        self.k_proj = nn.Linear(self.tok_dim, self.attn_dim)
-        self.v_proj = nn.Linear(self.tok_dim, self.attn_dim)
-        self.out_proj = nn.Linear(self.attn_dim, self.ctx_dim)
-
-    def _masked_mean(self, u: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        weights = mask.unsqueeze(-1)
+        weights = active_mask.unsqueeze(-1)
         denom = weights.sum(dim=2).clamp(min=1.0)
-        return (u * weights).sum(dim=2) / denom
+        pooled = (emb * weights).sum(dim=2) / denom
+        return pooled
+
+
+class SetTokenTeacher(nn.Module):
+    """
+    Token-based set teacher with masked cross-attention.
+
+    Inputs:
+        obs: [B, T, N, obs_dim]
+        active_mask: [B, T, N] in {0,1}
+
+    Outputs:
+        tokens: [B, T, K, D]
+        ctx_teacher: [B, T, N, D]
+    """
+
+    def __init__(
+        self,
+        obs_dim: int,
+        tok_dim: int,
+        num_tokens: int,
+        teacher_hidden_sizes: Sequence[int],
+    ):
+        super().__init__()
+        self.obs_dim = int(obs_dim)
+        self.tok_dim = int(tok_dim)
+        self.num_tokens = int(num_tokens)
+
+        self.agent_mlp = _build_mlp(self.obs_dim, tuple(teacher_hidden_sizes), self.tok_dim)
+        self.token_queries = nn.Parameter(torch.randn(self.num_tokens, self.tok_dim) * 0.02)
+
+    @staticmethod
+    def _masked_cross_attention(
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        key_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """
+        Mask-safe scaled dot-product attention.
+
+        query: [B, T, Q, D]
+        key: [B, T, M, D]
+        value: [B, T, M, D]
+        key_mask: optional [B, T, M]
+        """
+        scale = math.sqrt(float(query.shape[-1]))
+        scores = torch.einsum("btqd,btmd->btqm", query, key) / max(scale, 1e-8)
+
+        if key_mask is None:
+            weights = torch.softmax(scores, dim=-1)
+            return torch.einsum("btqm,btmd->btqd", weights, value)
+
+        mask_bool = key_mask.to(dtype=torch.bool, device=scores.device)
+        scores = scores.masked_fill(~mask_bool.unsqueeze(2), -1e9)
+
+        # Softmax over all-masked rows is stabilized by re-normalization after masking.
+        weights = torch.softmax(scores, dim=-1)
+        weights = weights * mask_bool.unsqueeze(2).to(dtype=weights.dtype)
+        weights = weights / weights.sum(dim=-1, keepdim=True).clamp(min=1e-8)
+        return torch.einsum("btqm,btmd->btqd", weights, value)
+
+    def forward(self, obs: torch.Tensor, active_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        b, t, n, d = obs.shape
+
+        emb = self.agent_mlp(obs.reshape(b * t * n, d)).reshape(b, t, n, self.tok_dim)
+        q_tokens = self.token_queries.view(1, 1, self.num_tokens, self.tok_dim).expand(b, t, -1, -1)
+
+        tokens = self._masked_cross_attention(q_tokens, emb, emb, key_mask=active_mask)
+        ctx_teacher = self._masked_cross_attention(emb, tokens, tokens, key_mask=None)
+
+        # Ensure inactive/padded agents do not contribute to downstream losses/metrics.
+        ctx_teacher = ctx_teacher * active_mask.unsqueeze(-1)
+        return tokens, ctx_teacher
+
+
+class SetValueCritic(nn.Module):
+    """Centralized value critic that consumes token teacher context."""
+
+    def __init__(
+        self,
+        obs_dim: int,
+        tok_dim: int,
+        num_tokens: int,
+        teacher_hidden_sizes: Sequence[int],
+        critic_hidden_sizes: Sequence[int],
+    ):
+        super().__init__()
+        self.teacher = SetTokenTeacher(
+            obs_dim=int(obs_dim),
+            tok_dim=int(tok_dim),
+            num_tokens=int(num_tokens),
+            teacher_hidden_sizes=tuple(teacher_hidden_sizes),
+        )
+        self.value_mlp = _build_mlp(int(tok_dim), tuple(critic_hidden_sizes), out_dim=1)
 
     def forward(
         self,
-        x: torch.Tensor,
+        obs: torch.Tensor,
         active_mask: torch.Tensor,
-        pool_mask: torch.Tensor,
+        return_details: bool = False,
     ):
-        # x: [B, T, N, D]
-        b, t, n, d = x.shape
-        u = self.agent_mlp(x.reshape(b * t * n, d)).reshape(b, t, n, -1)
+        tokens, ctx_teacher = self.teacher(obs, active_mask)
+        team_ctx = tokens.mean(dim=2)
 
-        u_queries = u * active_mask.unsqueeze(-1)
-        pooled = self._masked_mean(u, pool_mask)
+        b, t, c = team_ctx.shape
+        values = self.value_mlp(team_ctx.reshape(b * t, c)).reshape(b, t)
 
-        tok = self.token_mlp(pooled.reshape(b * t, -1)).reshape(b, t, self.num_tokens, self.tok_dim)
-
-        q = self.q_proj(u_queries)  # [B, T, N, A]
-        k = self.k_proj(tok)  # [B, T, K, A]
-        v = self.v_proj(tok)  # [B, T, K, A]
-
-        scores = (q.unsqueeze(3) * k.unsqueeze(2)).sum(dim=-1) / math.sqrt(self.attn_dim)
-        attn = F.softmax(scores, dim=-1)
-        ctx = (attn.unsqueeze(-1) * v.unsqueeze(2)).sum(dim=3)
-        ctx = self.out_proj(ctx)
-        return tok, ctx
+        if not return_details:
+            return values
+        return values, tokens, ctx_teacher
 
 
 class PIMAC(BaseLearningModel):
-    """PI-MAC: VDN + set-based teacher distillation for scalable team composition context."""
+    """MAPPO-style PI-MAC with decentralized actor and token-teacher centralized critic."""
 
     def __init__(
         self,
@@ -187,147 +286,191 @@ class PIMAC(BaseLearningModel):
         action_space_size: int,
         num_agents: int,
         device: str = "cpu",
-        temp_init: float = 1.0,
-        temp_decay: float = 0.999,
-        temp_min: float = 0.05,
         buffer_size: int = 2048,
         batch_size: int = 32,
         lr: float = 3e-4,
-        teacher_lr: float = 3e-4,
-        num_epochs: int = 1,
+        num_epochs: int = 4,
         num_hidden: int = 2,
         widths: Sequence[int] = (128, 128, 128),
         rnn_hidden_dim: int = 64,
-        ctx_dim: int = 16,
-        num_tokens: int = 8,
-        tok_dim: Optional[int] = None,
-        teacher_emb_dim: int = 128,
-        teacher_hidden_sizes: Sequence[int] = (128, 128),
-        teacher_attn_dim: Optional[int] = None,
-        teacher_drop_prob: float = 0.5,
-        distill_weight: float = 1.0,
-        token_smooth_weight: float = 0.0,
-        obs_index_dim: int = 3,
-        obs_skip: bool = False,
-        context_gate_reg: float = 0.0,
-        max_grad_norm: float = 10.0,
+        clip_eps: float = 0.2,
         gamma: float = 0.99,
-        target_update_every: int = 200,
-        double_q: bool = True,
-        tau: float = 1.0,
+        gae_lambda: float = 0.95,
+        normalize_advantage: bool = True,
+        entropy_coef: float = 0.01,
+        value_coef: float = 0.5,
+        max_grad_norm: Optional[float] = 1.0,
+        set_embed_dim: int = 128,
+        set_hidden_sizes: Sequence[int] = (128, 128),
+        critic_hidden_sizes: Sequence[int] = (128, 128),
         share_parameters: bool = True,
+        deterministic: bool = False,
+        # New token teacher/distillation knobs.
+        num_tokens: Optional[int] = None,
+        tok_dim: Optional[int] = None,
+        ctx_dim: Optional[int] = None,
+        teacher_hidden_sizes: Optional[Sequence[int]] = None,
+        teacher_drop_prob: Optional[float] = None,
+        teacher_ema_tau: float = 0.01,
+        distill_weight: Optional[float] = None,
+        ctx_logvar_min: float = -6.0,
+        ctx_logvar_max: float = 4.0,
+        # Backward-compatible/legacy knobs accepted for script stability.
+        temp_init: Optional[float] = None,
+        temp_decay: float = 1.0,
+        temp_min: float = 0.0,
+        teacher_lr: Optional[float] = None,
+        teacher_emb_dim: Optional[int] = None,
+        teacher_attn_dim: Optional[int] = None,
+        token_smooth_weight: Optional[float] = None,
+        obs_index_dim: Optional[int] = None,
+        obs_skip: Optional[bool] = None,
+        context_gate_reg: Optional[float] = None,
+        target_update_every: Optional[int] = None,
+        double_q: Optional[bool] = None,
+        tau: Optional[float] = None,
         q_tot_clip: Optional[float] = None,
-        use_huber_loss: bool = True,
-        normalize_by_active: bool = True,
-        # Sub-team augmentation.
-        subteam_samples: int = 0,
-        subteam_keep_prob: float = 0.75,
-        subteam_td_weight: float = 0.5,
+        use_huber_loss: Optional[bool] = None,
+        normalize_by_active: Optional[bool] = None,
+        subteam_samples: Optional[int] = None,
+        subteam_keep_prob: Optional[float] = None,
+        subteam_td_weight: Optional[float] = None,
     ):
         super().__init__()
+        del (
+            teacher_lr,
+            token_smooth_weight,
+            obs_index_dim,
+            obs_skip,
+            context_gate_reg,
+            target_update_every,
+            double_q,
+            tau,
+            q_tot_clip,
+            use_huber_loss,
+            normalize_by_active,
+            subteam_samples,
+            subteam_keep_prob,
+            subteam_td_weight,
+        )
+
         self.device = device
         self.obs_size = int(state_size)
         self.action_space_size = int(action_space_size)
         self.num_agents = int(num_agents)
 
         self.share_parameters = bool(share_parameters)
+        self.batch_size = int(batch_size)
+        self.num_epochs = int(num_epochs)
+        self.gamma = float(gamma)
+        self.gae_lambda = float(gae_lambda)
+        self.clip_eps = float(clip_eps)
+        self.normalize_advantage = bool(normalize_advantage)
+        self.entropy_coef = float(entropy_coef)
+        self.value_coef = float(value_coef)
+        self.max_grad_norm = float(max_grad_norm) if max_grad_norm is not None else None
 
-        self.temperature = float(temp_init)
+        resolved_ctx_dim = tok_dim
+        if resolved_ctx_dim is None:
+            resolved_ctx_dim = ctx_dim
+        if resolved_ctx_dim is None:
+            resolved_ctx_dim = teacher_attn_dim
+        if resolved_ctx_dim is None:
+            resolved_ctx_dim = teacher_emb_dim
+        if resolved_ctx_dim is None:
+            resolved_ctx_dim = set_embed_dim
+
+        self.ctx_dim = int(resolved_ctx_dim)
+        self.num_tokens = int(4 if num_tokens is None else num_tokens)
+        self.teacher_hidden_sizes = tuple(set_hidden_sizes if teacher_hidden_sizes is None else teacher_hidden_sizes)
+        self.teacher_drop_prob = float(0.1 if teacher_drop_prob is None else teacher_drop_prob)
+        self.teacher_drop_prob = max(0.0, min(1.0, self.teacher_drop_prob))
+        self.teacher_ema_tau = float(max(0.0, min(1.0, teacher_ema_tau)))
+        self.distill_weight = float(0.1 if distill_weight is None else distill_weight)
+        self.ctx_logvar_min = float(ctx_logvar_min)
+        self.ctx_logvar_max = float(ctx_logvar_max)
+
+        # Compatibility with old scripts that used Boltzmann temperature.
+        self.temperature = 1.0 if temp_init is None else float(temp_init)
         self.temp_decay = float(temp_decay)
         self.temp_min = float(temp_min)
 
-        self.batch_size = int(batch_size)
-        self.num_epochs = int(num_epochs)
-        self.max_grad_norm = float(max_grad_norm)
-
-        self.gamma = float(gamma)
-        self.target_update_every = max(1, int(target_update_every))
-        self.double_q = bool(double_q)
-        self.tau = float(tau)
-        self.q_tot_clip = float(q_tot_clip) if q_tot_clip is not None else None
-        self.use_huber_loss = bool(use_huber_loss)
-        self.normalize_by_active = bool(normalize_by_active)
-
-        self.subteam_samples = max(0, int(subteam_samples))
-        self.subteam_keep_prob = float(subteam_keep_prob)
-        self.subteam_td_weight = float(subteam_td_weight)
-
-        self.ctx_dim = int(ctx_dim)
-        self.num_tokens = int(num_tokens)
-        self.tok_dim = int(tok_dim) if tok_dim is not None else int(ctx_dim)
-        self.teacher_drop_prob = float(teacher_drop_prob)
-        self.distill_weight = float(distill_weight)
-        self.token_smooth_weight = float(token_smooth_weight)
-        self.obs_skip = bool(obs_skip)
-        self.context_gate_reg = float(context_gate_reg)
-
-        self._learn_steps = 0
+        self.deterministic = bool(deterministic)
 
         if self.share_parameters:
-            self.agent_net = PIMACAgentRNN(
-                self.obs_size,
-                self.action_space_size,
-                rnn_hidden_dim=int(rnn_hidden_dim),
+            self.actor_net = PIMACActorRNN(
+                obs_dim=self.obs_size,
+                action_dim=self.action_space_size,
                 num_hidden=int(num_hidden),
-                widths=widths,
-                ctx_dim=int(ctx_dim),
-                obs_skip=self.obs_skip,
-                obs_index_dim=int(obs_index_dim),
+                widths=tuple(widths),
+                rnn_hidden_dim=int(rnn_hidden_dim),
+                ctx_dim=self.ctx_dim,
+                ctx_logvar_min=self.ctx_logvar_min,
+                ctx_logvar_max=self.ctx_logvar_max,
             ).to(self.device)
-            self.target_agent_net = copy.deepcopy(self.agent_net).to(self.device)
-            self.target_agent_net.eval()
-            self.agent_nets = None
-            self.target_agent_nets = None
+            self.actor_nets = None
         else:
-            self.agent_net = None
-            self.target_agent_net = None
-            self.agent_nets = nn.ModuleList(
+            self.actor_net = None
+            self.actor_nets = nn.ModuleList(
                 [
-                    PIMACAgentRNN(
-                        self.obs_size,
-                        self.action_space_size,
-                        rnn_hidden_dim=int(rnn_hidden_dim),
+                    PIMACActorRNN(
+                        obs_dim=self.obs_size,
+                        action_dim=self.action_space_size,
                         num_hidden=int(num_hidden),
-                        widths=widths,
-                        ctx_dim=int(ctx_dim),
-                        obs_skip=self.obs_skip,
-                        obs_index_dim=int(obs_index_dim),
+                        widths=tuple(widths),
+                        rnn_hidden_dim=int(rnn_hidden_dim),
+                        ctx_dim=self.ctx_dim,
+                        ctx_logvar_min=self.ctx_logvar_min,
+                        ctx_logvar_max=self.ctx_logvar_max,
                     ).to(self.device)
                     for _ in range(self.num_agents)
                 ]
             )
-            self.target_agent_nets = copy.deepcopy(self.agent_nets).to(self.device)
-            self.target_agent_nets.eval()
 
-        teacher_in_dim = self.obs_size
-        self.teacher = SetTokenTeacher(
-            in_dim=teacher_in_dim,
+        self.critic = SetValueCritic(
+            obs_dim=self.obs_size,
+            tok_dim=self.ctx_dim,
             num_tokens=self.num_tokens,
-            tok_dim=self.tok_dim,
-            ctx_dim=self.ctx_dim,
-            emb_dim=int(teacher_emb_dim),
-            hidden_sizes=teacher_hidden_sizes,
-            attn_dim=teacher_attn_dim,
+            teacher_hidden_sizes=self.teacher_hidden_sizes,
+            critic_hidden_sizes=tuple(critic_hidden_sizes),
         ).to(self.device)
 
-        self.optimizer = optim.Adam(list(self._agent_parameters()), lr=float(lr))
-        self.teacher_optimizer = optim.Adam(self.teacher.parameters(), lr=float(teacher_lr))
+        # EMA target teacher is used only for distillation targets + diagnostics.
+        self.target_teacher = copy.deepcopy(self.critic.teacher).to(self.device)
+        for param in self.target_teacher.parameters():
+            param.requires_grad_(False)
+        self.target_teacher.eval()
 
+        actor_params = list(self._actor_parameters())
+        critic_params = list(self.critic.parameters())
+        self.optimizer = optim.Adam(actor_params + critic_params, lr=float(lr))
+
+        # Replay stores complete trajectories, but updates are strictly on-policy.
         self.memory = deque(maxlen=int(buffer_size))
-        self._episode_steps = []
+        self._episode_steps: list[dict] = []
         self._aec_cycle = None
 
         self.loss: list[float] = []
         self.last_losses: dict[str, float] = {}
         self.loss_history: list[dict[str, float]] = []
+
+        # Per-agent hidden state used only during decentralized inference.
         self._inference_hidden: dict[object, torch.Tensor] = {}
 
-    def _agent_parameters(self):
+        # Legacy aliases kept for broader script compatibility.
+        self.agent_net = self.actor_net if self.share_parameters else None
+        self.agent_nets = self.actor_nets
+        self.target_agent_net = self.actor_net if self.share_parameters else None
+        self.target_agent_nets = self.actor_nets
+        self.teacher = self.critic.teacher
+
+    def _actor_parameters(self):
         if self.share_parameters:
-            return self.agent_net.parameters()
-        return self.agent_nets.parameters()
+            return self.actor_net.parameters()
+        return self.actor_nets.parameters()
 
     def reset_episode(self) -> None:
+        """Clear inference hidden state between environment episodes."""
         self._inference_hidden = {}
         self._aec_cycle = None
 
@@ -343,10 +486,21 @@ class PIMAC(BaseLearningModel):
     def _random_action(self, action_mask: Optional[np.ndarray]) -> int:
         if action_mask is None:
             return int(np.random.randint(self.action_space_size))
-        valid_actions = np.flatnonzero(action_mask)
+        valid_actions = np.flatnonzero(np.asarray(action_mask, dtype=np.int8))
         if valid_actions.size == 0:
             return int(np.random.randint(self.action_space_size))
         return int(np.random.choice(valid_actions))
+
+    @staticmethod
+    def _apply_action_masks(logits: torch.Tensor, action_masks: torch.Tensor) -> torch.Tensor:
+        """Mask invalid actions with a large negative logit while handling all-zero masks safely."""
+        mask = action_masks.to(dtype=torch.bool, device=logits.device)
+        if mask.shape != logits.shape:
+            return logits
+
+        has_any_valid = mask.any(dim=-1, keepdim=True)
+        safe_mask = torch.where(has_any_valid, mask, torch.ones_like(mask))
+        return logits.masked_fill(~safe_mask, -1e9)
 
     def act(
         self,
@@ -354,35 +508,46 @@ class PIMAC(BaseLearningModel):
         action_mask: Optional[np.ndarray] = None,
         agent_index: Optional[object] = None,
     ) -> int:
+        """
+        Select one action for one agent from local observation only.
+
+        This is the decentralized execution path.
+        """
         if agent_index is None:
             agent_index = 0
 
         obs_t = torch.as_tensor(state, dtype=torch.float32, device=self.device).view(1, 1, -1)
+
         if self.share_parameters:
-            hidden_dim = self.agent_net.rnn.hidden_size
+            hidden_dim = self.actor_net.rnn.hidden_size
             h0 = self._get_h0(agent_index, hidden_dim)
-            q_seq, hn, _, _ = self.agent_net(obs_t, h0)
+            logits_seq, hn = self.actor_net(obs_t, h0)
         else:
             if not isinstance(agent_index, int):
                 raise ValueError("agent_index must be an int when share_parameters=False.")
             if agent_index < 0 or agent_index >= self.num_agents:
                 raise ValueError(f"agent_index {agent_index} is out of range for {self.num_agents} agents.")
-            net = self.agent_nets[agent_index]
+            net = self.actor_nets[agent_index]
             hidden_dim = net.rnn.hidden_size
             h0 = self._get_h0(agent_index, hidden_dim)
-            q_seq, hn, _, _ = net(obs_t, h0)
+            logits_seq, hn = net(obs_t, h0)
 
         self._set_h(agent_index, hn)
-        q_values = q_seq.squeeze(0).squeeze(0)
+        logits = logits_seq.squeeze(0).squeeze(0)
 
         if action_mask is not None:
-            mask = torch.as_tensor(action_mask, dtype=torch.bool, device=q_values.device)
-            if mask.shape[0] == q_values.shape[0] and mask.any():
-                q_values = q_values.masked_fill(~mask, -1e9)
+            mask = torch.as_tensor(action_mask, dtype=torch.bool, device=logits.device)
+            if mask.shape[0] == logits.shape[0] and mask.any():
+                logits = logits.masked_fill(~mask, -1e9)
             elif not mask.any():
                 return self._random_action(action_mask)
 
-        return self._boltzmann_action(q_values)
+        if self.deterministic or self.temperature <= 0.0:
+            return int(torch.argmax(logits).item())
+
+        scaled_logits = logits / max(self.temperature, 1e-8)
+        dist = torch.distributions.Categorical(logits=scaled_logits)
+        return int(dist.sample().item())
 
     # Parallel usage example:
     # actions = pimac.act_parallel(obs_dict, action_mask_dict)
@@ -406,8 +571,8 @@ class PIMAC(BaseLearningModel):
         next_action_mask_dict: Optional[dict] = None,
         global_state: Optional[np.ndarray] = None,
         next_global_state: Optional[np.ndarray] = None,
-        ) -> None:
-        """Parallel API helper: store a joint transition once per env step."""
+    ) -> None:
+        """Parallel API helper: store one joint transition per environment step."""
         done = bool(done_dict.get("__all__", False)) if isinstance(done_dict, dict) else bool(done_dict)
         self.store_transition(
             observations=obs_dict,
@@ -472,7 +637,7 @@ class PIMAC(BaseLearningModel):
         next_global_state: Optional[np.ndarray] = None,
         done_all: bool = False,
     ) -> None:
-        """AEC helper: finalize the joint transition after all agents acted in the cycle."""
+        """AEC helper: finalize and store a joint transition for the cycle."""
         if self._aec_cycle is None:
             raise RuntimeError("Call aec_begin_cycle before aec_end_cycle.")
         done = bool(done_all) or all(self._aec_cycle["dones"].values())
@@ -494,16 +659,8 @@ class PIMAC(BaseLearningModel):
         )
         self._aec_cycle = None
 
-    def _boltzmann_action(self, q_values: torch.Tensor) -> int:
-        temp = float(self.temperature)
-        if temp <= 0.0:
-            return int(torch.argmax(q_values).item())
-        logits = q_values / temp
-        logits = logits - torch.max(logits)
-        dist = torch.distributions.Categorical(logits=logits)
-        return int(dist.sample().item())
-
-    def _ensure_state(self, state: Optional[np.ndarray]) -> np.ndarray:
+    @staticmethod
+    def _ensure_state(state: Optional[np.ndarray]) -> np.ndarray:
         if state is None:
             return np.zeros(1, dtype=np.float32)
         return np.asarray(state, dtype=np.float32)
@@ -527,9 +684,7 @@ class PIMAC(BaseLearningModel):
         if obs_is_dict:
             if agent_ids is None:
                 agent_ids = _sorted_agent_ids(observations.keys())
-            obs_arr = np.stack(
-                [np.asarray(observations[aid], dtype=np.float32) for aid in agent_ids], axis=0
-            )
+            obs_arr = np.stack([np.asarray(observations[aid], dtype=np.float32) for aid in agent_ids], axis=0)
         else:
             obs_arr = np.asarray(observations, dtype=np.float32)
             if obs_arr.ndim == 1:
@@ -575,7 +730,9 @@ class PIMAC(BaseLearningModel):
         if next_active_mask is None:
             next_active_arr = np.ones(len(next_agent_ids), dtype=np.float32)
         elif isinstance(next_active_mask, dict):
-            next_active_arr = np.asarray([next_active_mask.get(aid, 0.0) for aid in next_agent_ids], dtype=np.float32)
+            next_active_arr = np.asarray(
+                [next_active_mask.get(aid, 0.0) for aid in next_agent_ids], dtype=np.float32
+            )
         else:
             next_active_arr = np.asarray(next_active_mask, dtype=np.float32)
             if next_active_arr.ndim == 0:
@@ -587,7 +744,8 @@ class PIMAC(BaseLearningModel):
             action_masks_arr = np.stack(
                 [
                     np.asarray(
-                        action_masks.get(aid, np.zeros(self.action_space_size, dtype=np.int8)), dtype=np.int8
+                        action_masks.get(aid, np.ones(self.action_space_size, dtype=np.int8)),
+                        dtype=np.int8,
                     )
                     for aid in agent_ids
                 ],
@@ -595,6 +753,8 @@ class PIMAC(BaseLearningModel):
             )
         else:
             action_masks_arr = np.asarray(action_masks, dtype=np.int8)
+            if action_masks_arr.ndim == 1:
+                action_masks_arr = action_masks_arr.reshape(1, -1)
 
         if next_action_masks is None:
             next_action_masks_arr = None
@@ -602,7 +762,8 @@ class PIMAC(BaseLearningModel):
             next_action_masks_arr = np.stack(
                 [
                     np.asarray(
-                        next_action_masks.get(aid, np.zeros(self.action_space_size, dtype=np.int8)), dtype=np.int8
+                        next_action_masks.get(aid, np.ones(self.action_space_size, dtype=np.int8)),
+                        dtype=np.int8,
                     )
                     for aid in next_agent_ids
                 ],
@@ -610,6 +771,8 @@ class PIMAC(BaseLearningModel):
             )
         else:
             next_action_masks_arr = np.asarray(next_action_masks, dtype=np.int8)
+            if next_action_masks_arr.ndim == 1:
+                next_action_masks_arr = next_action_masks_arr.reshape(1, -1)
 
         return {
             "agent_ids": list(agent_ids),
@@ -672,6 +835,7 @@ class PIMAC(BaseLearningModel):
         active_mask: np.ndarray,
         global_state: Optional[np.ndarray] = None,
     ) -> None:
+        """Convenience API for one-shot OpenURB daily transitions."""
         zeros_obs = np.zeros_like(np.asarray(observations, dtype=np.float32))
         state = self._ensure_state(global_state)
         zeros_state = np.zeros_like(state)
@@ -686,6 +850,110 @@ class PIMAC(BaseLearningModel):
             next_global_state=zeros_state,
             done=True,
         )
+
+    def _actor_forward(self, obs: torch.Tensor, return_aux: bool = False):
+        """obs: [B, T, N, obs_dim] -> logits: [B, T, N, A], aux tensors if requested."""
+        b, t, n, d = obs.shape
+
+        if self.share_parameters:
+            obs_bn = obs.permute(0, 2, 1, 3).reshape(b * n, t, d)
+            if return_aux:
+                logits_bn, _, aux_bn = self.actor_net(obs_bn, None, return_aux=True)
+                logits = logits_bn.reshape(b, n, t, -1).permute(0, 2, 1, 3)
+                aux = {
+                    "ctx_mu": aux_bn["ctx_mu"].reshape(b, n, t, -1).permute(0, 2, 1, 3),
+                    "ctx_logvar": aux_bn["ctx_logvar"].reshape(b, n, t, -1).permute(0, 2, 1, 3),
+                    "gate": aux_bn["gate"].reshape(b, n, t, -1).permute(0, 2, 1, 3),
+                }
+                return logits, aux
+
+            logits_bn, _ = self.actor_net(obs_bn, None)
+            logits = logits_bn.reshape(b, n, t, -1).permute(0, 2, 1, 3)
+            return logits, None
+
+        if n > len(self.actor_nets):
+            raise ValueError("Number of active roster slots exceeds available non-shared actor networks.")
+
+        logits_per_agent = []
+        ctx_mu_per_agent = []
+        ctx_logvar_per_agent = []
+        gate_per_agent = []
+        for idx in range(n):
+            if return_aux:
+                logits_i, _, aux_i = self.actor_nets[idx](obs[:, :, idx, :], None, return_aux=True)
+                ctx_mu_per_agent.append(aux_i["ctx_mu"].unsqueeze(2))
+                ctx_logvar_per_agent.append(aux_i["ctx_logvar"].unsqueeze(2))
+                gate_per_agent.append(aux_i["gate"].unsqueeze(2))
+            else:
+                logits_i, _ = self.actor_nets[idx](obs[:, :, idx, :], None)
+            logits_per_agent.append(logits_i.unsqueeze(2))
+
+        logits = torch.cat(logits_per_agent, dim=2)
+        if not return_aux:
+            return logits, None
+
+        aux = {
+            "ctx_mu": torch.cat(ctx_mu_per_agent, dim=2),
+            "ctx_logvar": torch.cat(ctx_logvar_per_agent, dim=2),
+            "gate": torch.cat(gate_per_agent, dim=2),
+        }
+        return logits, aux
+
+    @staticmethod
+    def _team_rewards(rewards: np.ndarray, active_mask: np.ndarray) -> np.ndarray:
+        numer = (rewards * active_mask).sum(axis=1)
+        denom = active_mask.sum(axis=1)
+        out = np.zeros(rewards.shape[0], dtype=np.float32)
+        valid = denom > 0
+        out[valid] = numer[valid] / denom[valid]
+        return out
+
+    def _compute_old_log_probs(
+        self,
+        obs: np.ndarray,
+        actions: np.ndarray,
+        active_mask: np.ndarray,
+        action_masks: Optional[np.ndarray],
+    ) -> np.ndarray:
+        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+        actions_t = torch.as_tensor(actions, dtype=torch.int64, device=self.device).unsqueeze(0)
+        active_t = torch.as_tensor(active_mask, dtype=torch.float32, device=self.device).unsqueeze(0)
+
+        with torch.no_grad():
+            logits, _ = self._actor_forward(obs_t, return_aux=False)
+            if action_masks is not None:
+                masks_t = torch.as_tensor(action_masks, dtype=torch.int8, device=self.device).unsqueeze(0)
+                logits = self._apply_action_masks(logits, masks_t)
+            dist = torch.distributions.Categorical(logits=logits)
+            old_log_probs = dist.log_prob(actions_t) * active_t
+
+        return old_log_probs.squeeze(0).cpu().numpy().astype(np.float32, copy=False)
+
+    def _compute_values(self, obs: np.ndarray, active_mask: np.ndarray) -> np.ndarray:
+        obs_t = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+        active_t = torch.as_tensor(active_mask, dtype=torch.float32, device=self.device).unsqueeze(0)
+        with torch.no_grad():
+            values = self.critic(obs_t, active_t).squeeze(0)
+        return values.cpu().numpy().astype(np.float32, copy=False)
+
+    def _compute_gae(
+        self,
+        team_rewards: np.ndarray,
+        values: np.ndarray,
+        next_values: np.ndarray,
+        dones: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        advantages = np.zeros_like(team_rewards, dtype=np.float32)
+        last_adv = 0.0
+
+        for t in range(team_rewards.shape[0] - 1, -1, -1):
+            nonterminal = 1.0 - float(dones[t])
+            delta = team_rewards[t] + self.gamma * nonterminal * next_values[t] - values[t]
+            last_adv = delta + self.gamma * self.gae_lambda * nonterminal * last_adv
+            advantages[t] = last_adv
+
+        returns = advantages + values
+        return advantages.astype(np.float32, copy=False), returns.astype(np.float32, copy=False)
 
     def _finalize_episode(self, steps: list[dict]) -> dict:
         roster = []
@@ -733,12 +1001,19 @@ class PIMAC(BaseLearningModel):
                 active_mask[ti, slot] = step["active_mask"][idx]
                 if action_masks is not None:
                     action_masks[ti, slot] = step["action_masks"][idx]
+
             for idx, aid in enumerate(step["next_agent_ids"]):
                 slot = roster_index[aid]
                 next_obs[ti, slot] = step["next_obs"][idx]
                 next_active_mask[ti, slot] = step["next_active_mask"][idx]
                 if next_action_masks is not None:
                     next_action_masks[ti, slot] = step["next_action_masks"][idx]
+
+        old_log_probs = self._compute_old_log_probs(obs, actions, active_mask, action_masks)
+        values = self._compute_values(obs, active_mask)
+        next_values = self._compute_values(next_obs, next_active_mask)
+        team_rewards = self._team_rewards(rewards, active_mask)
+        advantages, returns = self._compute_gae(team_rewards, values, next_values, done)
 
         return {
             "obs": obs,
@@ -752,135 +1027,81 @@ class PIMAC(BaseLearningModel):
             "done": done,
             "action_masks": action_masks,
             "next_action_masks": next_action_masks,
-            "T": obs.shape[0],
-            "N": obs.shape[1],
+            "old_log_probs": old_log_probs,
+            "advantages": advantages,
+            "returns": returns,
+            "values": values,
+            "team_rewards": team_rewards,
+            "T": int(obs.shape[0]),
+            "N": int(obs.shape[1]),
         }
 
-    def _masked_argmax(self, q_values: torch.Tensor, action_masks: Optional[torch.Tensor]) -> torch.Tensor:
-        if action_masks is None:
-            return torch.argmax(q_values, dim=-1)
-        mask = action_masks.to(dtype=torch.bool, device=q_values.device)
-        if mask.shape != q_values.shape:
-            return torch.argmax(q_values, dim=-1)
-        masked = q_values.masked_fill(~mask, -1e9)
-        no_valid = ~mask.any(dim=-1)
-        argmax = torch.argmax(masked, dim=-1)
-        return torch.where(no_valid, torch.zeros_like(argmax), argmax)
+    def _sample_teacher_mask(self, active_mask: torch.Tensor, drop_prob: float) -> torch.Tensor:
+        """
+        Drop active agents for teacher/critic inputs while keeping at least one active
+        entry per timestep whenever the original mask has active agents.
+        """
+        if drop_prob <= 0.0:
+            return active_mask
 
-    def _mix_q_tot(self, chosen_q: torch.Tensor, active_mask: torch.Tensor) -> torch.Tensor:
-        masked_q = chosen_q * active_mask
-        q_sum = masked_q.sum(dim=2)
-        if not self.normalize_by_active:
-            return q_sum
-        counts = active_mask.sum(dim=2).clamp(min=1.0)
-        return q_sum / counts
+        keep = (torch.rand_like(active_mask) > float(drop_prob)).to(dtype=active_mask.dtype)
+        dropped = active_mask * keep
 
-    def _update_targets(self) -> None:
-        if self.tau >= 1.0:
-            if self.share_parameters:
-                self.target_agent_net.load_state_dict(self.agent_net.state_dict())
-            else:
-                self.target_agent_nets.load_state_dict(self.agent_nets.state_dict())
+        original_active = active_mask > 0.0
+        originally_non_empty = original_active.any(dim=-1)
+        became_empty = (dropped.sum(dim=-1) <= 0.0) & originally_non_empty
+
+        if became_empty.any():
+            bt_indices = torch.nonzero(became_empty, as_tuple=False)
+            for bt in bt_indices:
+                b_idx = int(bt[0].item())
+                t_idx = int(bt[1].item())
+                active_ids = torch.nonzero(original_active[b_idx, t_idx], as_tuple=False).squeeze(-1)
+                if active_ids.numel() == 0:
+                    continue
+                choice = int(torch.randint(active_ids.numel(), (1,), device=active_mask.device).item())
+                keep_idx = int(active_ids[choice].item())
+                dropped[b_idx, t_idx, keep_idx] = 1.0
+
+        return dropped
+
+    def _teacher_for_targets(self) -> SetTokenTeacher:
+        if self.teacher_ema_tau > 0.0:
+            return self.target_teacher
+        return self.critic.teacher
+
+    def _update_target_teacher(self) -> None:
+        if self.teacher_ema_tau <= 0.0:
             return
 
+        tau = float(self.teacher_ema_tau)
         with torch.no_grad():
-            if self.share_parameters:
-                for target_p, online_p in zip(self.target_agent_net.parameters(), self.agent_net.parameters()):
-                    target_p.data.mul_(1.0 - self.tau).add_(self.tau * online_p.data)
-            else:
-                for target_p, online_p in zip(self.target_agent_nets.parameters(), self.agent_nets.parameters()):
-                    target_p.data.mul_(1.0 - self.tau).add_(self.tau * online_p.data)
+            for tgt_param, src_param in zip(self.target_teacher.parameters(), self.critic.teacher.parameters()):
+                tgt_param.mul_(1.0 - tau).add_(src_param, alpha=tau)
 
-    def _agent_q_values(self, obs: torch.Tensor, net, share: bool) -> torch.Tensor:
-        # obs: [B, T, N, obs_dim] -> [B, T, N, A]
-        b, t, n, d = obs.shape
-        if share:
-            obs_bn = obs.permute(0, 2, 1, 3).reshape(b * n, t, d)
-            q_bn, _, _, _ = net(obs_bn, None)
-            return q_bn.reshape(b, n, t, -1).permute(0, 2, 1, 3)
+            for tgt_buf, src_buf in zip(self.target_teacher.buffers(), self.critic.teacher.buffers()):
+                if torch.is_floating_point(tgt_buf):
+                    tgt_buf.mul_(1.0 - tau).add_(src_buf, alpha=tau)
+                else:
+                    tgt_buf.copy_(src_buf)
 
-        qs = []
-        for idx in range(n):
-            q_i, _, _, _ = net[idx](obs[:, :, idx, :], None)
-            qs.append(q_i.unsqueeze(2))
-        return torch.cat(qs, dim=2)
-
-    def _agent_forward(self, obs: torch.Tensor, net, share: bool):
-        # Returns Q-values + predicted context and log-variance.
-        b, t, n, d = obs.shape
-        if share:
-            obs_bn = obs.permute(0, 2, 1, 3).reshape(b * n, t, d)
-            q_bn, _, ctx_bn, logvar_bn = net(obs_bn, None)
-            q = q_bn.reshape(b, n, t, -1).permute(0, 2, 1, 3)
-            ctx = ctx_bn.reshape(b, n, t, -1).permute(0, 2, 1, 3)
-            logvar = logvar_bn.reshape(b, n, t, -1).permute(0, 2, 1, 3)
-            return q, ctx, logvar
-
-        qs, ctxs, logvars = [], [], []
-        for idx in range(n):
-            q_i, _, ctx_i, logvar_i = net[idx](obs[:, :, idx, :], None)
-            qs.append(q_i.unsqueeze(2))
-            ctxs.append(ctx_i.unsqueeze(2))
-            logvars.append(logvar_i.unsqueeze(2))
-        return torch.cat(qs, dim=2), torch.cat(ctxs, dim=2), torch.cat(logvars, dim=2)
-
-    def _sample_subteam_mask(self, active_mask: torch.Tensor) -> torch.Tensor:
-        # active_mask: [B, T, N] in {0,1} -> sub_mask: [B, T, N] in {0,1}
-        if self.subteam_keep_prob >= 1.0:
-            return torch.ones_like(active_mask)
-        keep = (torch.rand_like(active_mask) < self.subteam_keep_prob).to(dtype=active_mask.dtype)
-        sub = active_mask * keep
-
-        # Ensure at least one active agent per (B,T) when there exists any active agent.
-        b, t, _ = active_mask.shape
-        active_counts = active_mask.sum(dim=2)
-        sub_counts = sub.sum(dim=2)
-        need_fix = (active_counts > 0.0) & (sub_counts == 0.0)
-        if not need_fix.any():
-            return sub
-
-        for bi, ti in need_fix.nonzero(as_tuple=False):
-            candidates = torch.nonzero(active_mask[bi, ti] > 0.0, as_tuple=False).squeeze(-1)
-            chosen = candidates[torch.randint(0, candidates.shape[0], (1,), device=active_mask.device)]
-            sub[bi, ti, chosen] = 1.0
-        return sub
-
-    def _teacher_pool_mask(self, active_mask: torch.Tensor) -> torch.Tensor:
-        if self.teacher_drop_prob <= 0.0:
-            return active_mask
-        keep = (torch.rand_like(active_mask) > self.teacher_drop_prob).to(dtype=active_mask.dtype)
-        pool_mask = active_mask * keep
-        need_full = (pool_mask.sum(dim=2) == 0.0) & (active_mask.sum(dim=2) > 0.0)
-        if need_full.any():
-            pool_mask = torch.where(need_full.unsqueeze(-1), active_mask, pool_mask)
-        return pool_mask
-
-    def _distill_loss(
-        self,
-        ctx_pred: torch.Tensor,
-        logvar_pred: torch.Tensor,
-        teacher_ctx: torch.Tensor,
-        active_mask: torch.Tensor,
-        time_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        logvar = torch.clamp(logvar_pred, min=-10.0, max=10.0)
-        err = (ctx_pred - teacher_ctx.detach()).pow(2)
-        weights = active_mask * time_mask.unsqueeze(-1)
-        per = (torch.exp(-logvar) * err + logvar).mean(dim=-1)
-        return (per * weights).sum() / weights.sum().clamp(min=1.0)
+    @staticmethod
+    def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        return (values * mask).sum() / mask.sum().clamp(min=1.0)
 
     def learn(self) -> None:
+        """Run PPO updates + distillation and clear on-policy memory after a successful update."""
         if len(self.memory) < self.batch_size:
             return
 
-        step_losses = []
+        epoch_losses = []
         for _ in range(self.num_epochs):
             batch = random.sample(self.memory, self.batch_size)
             max_t = max(int(ep["T"]) for ep in batch)
             max_n = max(int(ep["N"]) for ep in batch)
 
-            if not self.share_parameters and max_n > self.num_agents:
-                raise ValueError("max_n exceeds the number of agent networks; enable share_parameters.")
+            if (not self.share_parameters) and max_n > self.num_agents:
+                raise ValueError("max_n exceeds configured number of non-shared actor networks.")
 
             def pad_time(x, pad_value=0.0):
                 t = x.shape[0]
@@ -897,239 +1118,215 @@ class PIMAC(BaseLearningModel):
                 pad_width = [(0, max_t - t), (0, max_n - n)] + [(0, 0)] * (x.ndim - 2)
                 return np.pad(x, pad_width, mode="constant", constant_values=pad_value)
 
-            obs = torch.tensor(
-                np.stack([pad_time_agents(ep["obs"]) for ep in batch]), device=self.device, dtype=torch.float32
+            obs = torch.as_tensor(
+                np.stack([pad_time_agents(ep["obs"]) for ep in batch]),
+                device=self.device,
+                dtype=torch.float32,
             )
-            actions = torch.tensor(
+            actions = torch.as_tensor(
                 np.stack([pad_time_agents(ep["actions"], pad_value=0) for ep in batch]),
                 device=self.device,
                 dtype=torch.int64,
             )
-            rewards = torch.tensor(
-                np.stack([pad_time_agents(ep["rewards"], pad_value=0.0) for ep in batch]),
-                device=self.device,
-                dtype=torch.float32,
-            )
-            active_mask = torch.tensor(
+            active_mask = torch.as_tensor(
                 np.stack([pad_time_agents(ep["active_mask"], pad_value=0.0) for ep in batch]),
                 device=self.device,
                 dtype=torch.float32,
             )
-
-            next_obs = torch.tensor(
-                np.stack([pad_time_agents(ep["next_obs"]) for ep in batch]), device=self.device, dtype=torch.float32
-            )
-            next_active_mask = torch.tensor(
-                np.stack([pad_time_agents(ep["next_active_mask"], pad_value=0.0) for ep in batch]),
+            old_log_probs = torch.as_tensor(
+                np.stack([pad_time_agents(ep["old_log_probs"], pad_value=0.0) for ep in batch]),
                 device=self.device,
                 dtype=torch.float32,
             )
-            dones = torch.tensor(
-                np.stack([pad_time(ep["done"].reshape(-1, 1)) for ep in batch]),
+            advantages = torch.as_tensor(
+                np.stack([pad_time(ep["advantages"], pad_value=0.0) for ep in batch]),
                 device=self.device,
                 dtype=torch.float32,
-            ).squeeze(-1)
-
-            lengths = torch.tensor([int(ep["T"]) for ep in batch], device=self.device, dtype=torch.int64)
-            time_mask = (
-                torch.arange(max_t, device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
-            ).to(dtype=torch.float32)
-
-            agent_pad_mask = torch.tensor(
-                np.stack(
-                    [
-                        np.concatenate(
-                            [np.ones(ep["N"], dtype=np.float32), np.zeros(max_n - ep["N"], dtype=np.float32)]
-                        )
-                        for ep in batch
-                    ]
-                ),
+            )
+            returns = torch.as_tensor(
+                np.stack([pad_time(ep["returns"], pad_value=0.0) for ep in batch]),
                 device=self.device,
                 dtype=torch.float32,
             )
 
             action_masks = None
-            next_action_masks = None
             if all(ep.get("action_masks") is not None for ep in batch):
-                action_masks = torch.tensor(
+                action_masks = torch.as_tensor(
                     np.stack([pad_time_agents(ep["action_masks"], pad_value=0) for ep in batch]),
                     device=self.device,
                     dtype=torch.int8,
                 )
-            if all(ep.get("next_action_masks") is not None for ep in batch):
-                next_action_masks = torch.tensor(
-                    np.stack([pad_time_agents(ep["next_action_masks"], pad_value=0) for ep in batch]),
-                    device=self.device,
-                    dtype=torch.int8,
-                )
 
-            combined_mask = active_mask * agent_pad_mask.unsqueeze(1)
-            next_combined_mask = next_active_mask * agent_pad_mask.unsqueeze(1)
+            lengths = torch.as_tensor([int(ep["T"]) for ep in batch], device=self.device, dtype=torch.int64)
+            time_mask = (
+                torch.arange(max_t, device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
+            ).to(dtype=torch.float32)
 
-            if self.share_parameters:
-                q_all, ctx_pred, logvar_pred = self._agent_forward(obs, self.agent_net, share=True)
-                next_q_online = self._agent_q_values(next_obs, self.agent_net, share=True)
-                with torch.no_grad():
-                    next_q_target = self._agent_q_values(next_obs, self.target_agent_net, share=True)
-            else:
-                q_all, ctx_pred, logvar_pred = self._agent_forward(obs, self.agent_nets, share=False)
-                next_q_online = self._agent_q_values(next_obs, self.agent_nets, share=False)
-                with torch.no_grad():
-                    next_q_target = self._agent_q_values(next_obs, self.target_agent_nets, share=False)
+            combined_mask = active_mask * time_mask.unsqueeze(-1)
+            valid_time = time_mask * (active_mask.sum(dim=2) > 0.0).to(dtype=torch.float32)
 
-            safe_actions = actions.clone()
-            safe_actions[combined_mask == 0] = 0
-            chosen_q = torch.gather(q_all, 3, safe_actions.unsqueeze(-1)).squeeze(-1)
-            chosen_q = chosen_q * combined_mask
+            if self.normalize_advantage:
+                flat_adv = advantages[valid_time.bool()]
+                if flat_adv.numel() > 0:
+                    adv_mean = flat_adv.mean()
+                    adv_std = flat_adv.std(unbiased=False)
+                    advantages = (advantages - adv_mean) / (adv_std + 1e-8)
 
-            q_tot = self._mix_q_tot(chosen_q, combined_mask)
-            if self.q_tot_clip is not None:
-                q_tot = torch.clamp(q_tot, -self.q_tot_clip, self.q_tot_clip)
+            logits, actor_aux = self._actor_forward(obs, return_aux=True)
+            if action_masks is not None:
+                logits = self._apply_action_masks(logits, action_masks)
 
-            active_counts = combined_mask.sum(dim=2).clamp(min=1.0)
-            team_rewards = (rewards * combined_mask).sum(dim=2) / active_counts
+            dist = torch.distributions.Categorical(logits=logits)
+            new_log_probs = dist.log_prob(actions)
+            entropy = dist.entropy()
 
+            adv_expanded = advantages.unsqueeze(-1).expand_as(new_log_probs)
+            ratio = torch.exp(new_log_probs - old_log_probs)
+            surr1 = ratio * adv_expanded
+            surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * adv_expanded
+
+            decision_denom = combined_mask.sum().clamp(min=1.0)
+            policy_loss = -(torch.min(surr1, surr2) * combined_mask).sum() / decision_denom
+            entropy_bonus = (entropy * combined_mask).sum() / decision_denom
+
+            critic_mask = self._sample_teacher_mask(active_mask, self.teacher_drop_prob)
+            values, _, _ = self.critic(obs, critic_mask, return_details=True)
+            value_loss = (((returns - values) ** 2) * valid_time).sum() / valid_time.sum().clamp(min=1.0)
+
+            teacher_for_targets = self._teacher_for_targets()
             with torch.no_grad():
-                if self.double_q:
-                    next_actions = self._masked_argmax(next_q_online, next_action_masks)
-                else:
-                    next_actions = self._masked_argmax(next_q_target, next_action_masks)
-                safe_next_actions = next_actions.clone()
-                safe_next_actions[next_combined_mask == 0] = 0
-                next_chosen_q = torch.gather(next_q_target, 3, safe_next_actions.unsqueeze(-1)).squeeze(-1)
-                next_chosen_q = next_chosen_q * next_combined_mask
+                _, ctx_tgt = teacher_for_targets(obs, active_mask)
 
-                q_tot_next = self._mix_q_tot(next_chosen_q, next_combined_mask)
-                if self.q_tot_clip is not None:
-                    q_tot_next = torch.clamp(q_tot_next, -self.q_tot_clip, self.q_tot_clip)
+            ctx_mu = actor_aux["ctx_mu"]
+            ctx_logvar = actor_aux["ctx_logvar"]
+            gate = actor_aux["gate"].squeeze(-1)
 
-                targets = team_rewards + (1.0 - dones) * self.gamma * q_tot_next
-                if self.q_tot_clip is not None:
-                    targets = torch.clamp(targets, -self.q_tot_clip, self.q_tot_clip)
+            distill_nll = 0.5 * torch.exp(-ctx_logvar) * ((ctx_mu - ctx_tgt) ** 2) + 0.5 * ctx_logvar
+            distill_per_agent = distill_nll.sum(dim=-1)
+            distill_loss = (distill_per_agent * combined_mask).sum() / decision_denom
 
-            if self.use_huber_loss:
-                td = F.smooth_l1_loss(q_tot, targets, reduction="none")
-            else:
-                td = F.mse_loss(q_tot, targets, reduction="none")
-            td_loss = (td * time_mask).sum() / time_mask.sum().clamp(min=1.0)
+            distill_mse_per_agent = ((ctx_mu - ctx_tgt) ** 2).mean(dim=-1)
+            distill_mse = (distill_mse_per_agent * combined_mask).sum() / decision_denom
 
-            subteam_td_loss = torch.tensor(0.0, device=self.device)
-            if self.subteam_samples > 0 and self.subteam_td_weight > 0.0:
-                acc = 0.0
-                for _k in range(self.subteam_samples):
-                    sub_mask = self._sample_subteam_mask(combined_mask)
-                    sub_active = sub_mask
-                    sub_counts = sub_active.sum(dim=2).clamp(min=1.0)
-                    sub_rewards = (rewards * sub_active).sum(dim=2) / sub_counts
-
-                    chosen_q_sub = chosen_q * sub_mask
-                    q_tot_sub = self._mix_q_tot(chosen_q_sub, sub_active)
-                    if self.q_tot_clip is not None:
-                        q_tot_sub = torch.clamp(q_tot_sub, -self.q_tot_clip, self.q_tot_clip)
-
-                    with torch.no_grad():
-                        sub_next_active = next_combined_mask * sub_mask
-                        next_chosen_q_sub = next_chosen_q * sub_mask
-                        q_tot_next_sub = self._mix_q_tot(next_chosen_q_sub, sub_next_active)
-                        if self.q_tot_clip is not None:
-                            q_tot_next_sub = torch.clamp(q_tot_next_sub, -self.q_tot_clip, self.q_tot_clip)
-                        targets_sub = sub_rewards + (1.0 - dones) * self.gamma * q_tot_next_sub
-                        if self.q_tot_clip is not None:
-                            targets_sub = torch.clamp(targets_sub, -self.q_tot_clip, self.q_tot_clip)
-
-                    if self.use_huber_loss:
-                        td_sub = F.smooth_l1_loss(q_tot_sub, targets_sub, reduction="none")
-                    else:
-                        td_sub = F.mse_loss(q_tot_sub, targets_sub, reduction="none")
-                    acc = acc + (td_sub * time_mask).sum() / time_mask.sum().clamp(min=1.0)
-                subteam_td_loss = acc / float(self.subteam_samples)
-
-            gate_reg = torch.tensor(0.0, device=self.device)
-            if self.context_gate_reg > 0.0:
-                gate = torch.sigmoid(-logvar_pred.mean(dim=-1))
-                gate = torch.clamp(gate, min=0.0, max=1.0)
-                gate_weights = combined_mask * time_mask.unsqueeze(-1)
-                gate_reg = (gate.pow(2) * gate_weights).sum() / gate_weights.sum().clamp(min=1.0)
-
-            distill_loss = torch.tensor(0.0, device=self.device)
-            teacher_smooth = torch.tensor(0.0, device=self.device)
-
-            need_teacher = (
-                self.distill_weight > 0.0
-                or self.token_smooth_weight > 0.0
-            )
-            if need_teacher:
-                teacher_in = obs
-
-                pool_mask = self._teacher_pool_mask(combined_mask)
-                tokens, teacher_ctx = self.teacher(teacher_in, active_mask=combined_mask, pool_mask=pool_mask)
-
-                # Teacher outputs are detached for distillation; execution uses local ctx_pred only.
-                if self.distill_weight > 0.0:
-                    distill_loss = self._distill_loss(ctx_pred, logvar_pred, teacher_ctx, combined_mask, time_mask)
-
-                if self.token_smooth_weight > 0.0 and tokens.shape[1] > 1:
-                    diff = tokens[:, 1:] - tokens[:, :-1]
-                    smooth = diff.pow(2).mean(dim=(2, 3))
-                    smooth_mask = time_mask[:, 1:] * time_mask[:, :-1]
-                    teacher_smooth = (smooth * smooth_mask).sum() / smooth_mask.sum().clamp(min=1.0)
-
-            agent_loss = td_loss
-            if self.subteam_td_weight > 0.0 and self.subteam_samples > 0:
-                agent_loss = agent_loss + self.subteam_td_weight * subteam_td_loss
-            if self.distill_weight > 0.0:
-                agent_loss = agent_loss + self.distill_weight * distill_loss
-            if self.context_gate_reg > 0.0:
-                agent_loss = agent_loss + self.context_gate_reg * gate_reg
-
-            teacher_loss = self.token_smooth_weight * teacher_smooth
+            ppo_loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy_bonus
+            loss = ppo_loss + self.distill_weight * distill_loss
 
             self.optimizer.zero_grad()
-            agent_loss.backward()
-            nn.utils.clip_grad_norm_(list(self._agent_parameters()), max_norm=self.max_grad_norm)
+            loss.backward()
+            if self.max_grad_norm is not None:
+                nn.utils.clip_grad_norm_(
+                    list(self._actor_parameters()) + list(self.critic.parameters()),
+                    max_norm=self.max_grad_norm,
+                )
             self.optimizer.step()
+            self._update_target_teacher()
 
-            if need_teacher and teacher_loss.item() > 0.0:
-                self.teacher_optimizer.zero_grad()
-                teacher_loss.backward()
-                nn.utils.clip_grad_norm_(list(self.teacher.parameters()), max_norm=self.max_grad_norm)
-                self.teacher_optimizer.step()
+            # PPO diagnostics.
+            with torch.no_grad():
+                log_ratio = new_log_probs - old_log_probs
+                approx_kl = ((-log_ratio) * combined_mask).sum() / decision_denom
+                clip_frac = (((ratio - 1.0).abs() > self.clip_eps).to(dtype=torch.float32) * combined_mask).sum()
+                clip_frac = clip_frac / decision_denom
 
-            self._learn_steps += 1
-            if self._learn_steps % self.target_update_every == 0:
-                self._update_targets()
+                vt = valid_time.bool()
+                if vt.any():
+                    returns_valid = returns[vt]
+                    values_valid = values.detach()[vt]
+                    var_returns = torch.var(returns_valid, unbiased=False)
+                    if float(var_returns.item()) > 1e-8:
+                        explained_variance = 1.0 - (
+                            torch.var(returns_valid - values_valid, unbiased=False) / (var_returns + 1e-8)
+                        )
+                    else:
+                        explained_variance = torch.tensor(0.0, device=self.device)
+                else:
+                    explained_variance = torch.tensor(0.0, device=self.device)
 
-            total = float((agent_loss.detach() + teacher_loss.detach()).item())
-            step_losses.append(total)
+                # Teacher interpretability metrics on full masks.
+                tokens_full, ctx_full_online = self.critic.teacher(obs, active_mask)
+                token_norm = torch.linalg.norm(tokens_full, dim=-1)
+                token_mask = valid_time.unsqueeze(-1).expand_as(token_norm)
+                token_norm_mean = self._masked_mean(token_norm, token_mask)
+
+                teacher_ctx_norm = torch.linalg.norm(ctx_full_online, dim=-1)
+                teacher_ctx_norm_mean = self._masked_mean(teacher_ctx_norm, combined_mask)
+
+                # Metric-only consistency diagnostic using target teacher.
+                diag_drop_mask = self._sample_teacher_mask(active_mask, self.teacher_drop_prob)
+                _, ctx_full_diag = teacher_for_targets(obs, active_mask)
+                _, ctx_drop_diag = teacher_for_targets(obs, diag_drop_mask)
+                diag_mask = diag_drop_mask * time_mask.unsqueeze(-1)
+                ctx_l2 = torch.sqrt(((ctx_full_diag - ctx_drop_diag) ** 2).sum(dim=-1) + 1e-12)
+                ctx_consistency_l2 = self._masked_mean(ctx_l2, diag_mask)
+
+                logvar_mean_per_agent = ctx_logvar.mean(dim=-1)
+                selected_logvar = logvar_mean_per_agent[combined_mask.bool()]
+                if selected_logvar.numel() > 0:
+                    ctx_logvar_mean = selected_logvar.mean()
+                    ctx_logvar_std = selected_logvar.std(unbiased=False)
+                else:
+                    ctx_logvar_mean = torch.tensor(0.0, device=self.device)
+                    ctx_logvar_std = torch.tensor(0.0, device=self.device)
+
+                selected_gate = gate[combined_mask.bool()]
+                if selected_gate.numel() > 0:
+                    gate_mean = selected_gate.mean()
+                    gate_std = selected_gate.std(unbiased=False)
+                else:
+                    gate_mean = torch.tensor(0.0, device=self.device)
+                    gate_std = torch.tensor(0.0, device=self.device)
+
+                active_decisions = float(combined_mask.sum().item())
+                active_agents_per_step = active_mask.sum(dim=-1)
+                active_agents_mean = self._masked_mean(active_agents_per_step, valid_time)
+
+            total = float(loss.detach().item())
+            epoch_losses.append(total)
             self.last_losses = {
-                "td": float(td_loss.detach().item()),
-                "subteam_td": float(subteam_td_loss.detach().item()),
-                "distill": float(distill_loss.detach().item()),
-                "teacher_smooth": float(teacher_smooth.detach().item()),
-                "context_gate_reg": float(gate_reg.detach().item()),
-                "agent_loss": float(agent_loss.detach().item()),
-                "teacher_loss": float(teacher_loss.detach().item()),
+                "policy_loss": float(policy_loss.detach().item()),
+                "value_loss": float(value_loss.detach().item()),
+                "entropy": float(entropy_bonus.detach().item()),
+                "total_loss": total,
+                "approx_kl": float(approx_kl.detach().item()),
+                "clip_frac": float(clip_frac.detach().item()),
+                "explained_variance": float(explained_variance.detach().item()),
+                "distill_loss": float(distill_loss.detach().item()),
+                "distill_mse": float(distill_mse.detach().item()),
+                "ctx_logvar_mean": float(ctx_logvar_mean.detach().item()),
+                "ctx_logvar_std": float(ctx_logvar_std.detach().item()),
+                "gate_mean": float(gate_mean.detach().item()),
+                "gate_std": float(gate_std.detach().item()),
+                "token_norm_mean": float(token_norm_mean.detach().item()),
+                "teacher_ctx_norm_mean": float(teacher_ctx_norm_mean.detach().item()),
+                "ctx_consistency_l2": float(ctx_consistency_l2.detach().item()),
+                "active_decisions": active_decisions,
+                "active_agents_mean": float(active_agents_mean.detach().item()),
             }
             self.loss_history.append(self.last_losses.copy())
 
-        self.loss.append(float(sum(step_losses) / len(step_losses)))
+        if epoch_losses:
+            self.loss.append(float(sum(epoch_losses) / len(epoch_losses)))
+
+        # PPO is on-policy; old trajectories are stale after an update.
+        self.memory.clear()
         self.decay_temperature()
 
     def decay_temperature(self) -> None:
+        """Compatibility helper for old scripts that controlled exploration temperature."""
         self.temperature = max(self.temp_min, self.temperature * self.temp_decay)
 
     def set_eval_mode(self) -> None:
         if self.share_parameters:
-            self.agent_net.eval()
-            self.target_agent_net.eval()
+            self.actor_net.eval()
         else:
-            self.agent_nets.eval()
-            self.target_agent_nets.eval()
-        self.teacher.eval()
+            self.actor_nets.eval()
+        self.critic.eval()
+        self.target_teacher.eval()
 
     def set_train_mode(self) -> None:
         if self.share_parameters:
-            self.agent_net.train()
+            self.actor_net.train()
         else:
-            self.agent_nets.train()
-        self.teacher.train()
+            self.actor_nets.train()
+        self.critic.train()
+        self.target_teacher.eval()
