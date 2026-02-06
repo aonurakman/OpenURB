@@ -27,7 +27,7 @@ def test_network_width_mismatch_raises():
 def test_teacher_tokens_permutation_invariant():
     torch.manual_seed(0)
 
-    teacher = SetTokenTeacher(in_dim=4, num_tokens=4, tok_dim=8, ctx_dim=6, action_dim=5)
+    teacher = SetTokenTeacher(in_dim=4, num_tokens=4, tok_dim=8, ctx_dim=6)
     teacher.eval()
 
     obs = torch.randn(1, 2, 5, 4)
@@ -41,6 +41,53 @@ def test_teacher_tokens_permutation_invariant():
 
     tokens_b, _ = teacher(obs_perm, active_mask=mask_perm, pool_mask=mask_perm)
     assert torch.allclose(tokens_a, tokens_b, atol=1e-6)
+
+
+def test_agent_forward_without_identity_features():
+    torch.manual_seed(0)
+
+    agent = PIMACAgentRNN(
+        obs_dim=5,
+        action_dim=3,
+        rnn_hidden_dim=8,
+        num_hidden=1,
+        widths=(8, 8),
+        ctx_dim=4,
+        obs_skip=True,
+        obs_index_dim=0,
+    )
+    obs = torch.randn(2, 1, 5)
+    q, hn, ctx, logvar = agent(obs)
+
+    assert q.shape == (2, 1, 3)
+    assert ctx.shape == (2, 1, 4)
+    assert logvar.shape == (2, 1, 4)
+    assert hn.shape == (1, 2, 8)
+
+
+def test_context_gate_can_zero_out_film():
+    torch.manual_seed(0)
+
+    agent = PIMACAgentRNN(
+        obs_dim=4,
+        action_dim=2,
+        rnn_hidden_dim=8,
+        num_hidden=1,
+        widths=(8, 8),
+        ctx_dim=4,
+        obs_skip=False,
+        obs_index_dim=0,
+    )
+    obs = torch.randn(1, 1, 4)
+
+    with torch.no_grad():
+        agent.logvar_head.weight.zero_()
+        agent.logvar_head.bias.fill_(20.0)
+        q_a, _, _, _ = agent(obs)
+        agent.ctx_head.bias.add_(5.0)
+        q_b, _, _, _ = agent(obs)
+
+    assert torch.allclose(q_a, q_b, atol=1e-6)
 
 
 def test_act_respects_action_mask_when_exploiting():
@@ -68,7 +115,6 @@ def test_act_respects_action_mask_when_exploiting():
         share_parameters=True,
         normalize_by_active=True,
         distill_weight=0.0,
-        teacher_aux_weight=0.0,
         token_smooth_weight=0.0,
     )
     pimac.reset_episode()
@@ -148,7 +194,6 @@ def test_learn_updates_parameters_and_decays_temperature():
         share_parameters=True,
         normalize_by_active=True,
         distill_weight=0.0,
-        teacher_aux_weight=0.0,
         token_smooth_weight=0.0,
     )
 
@@ -226,6 +271,35 @@ def test_variable_n_batching_smoke():
 
     pimac.learn()
     assert len(pimac.loss) == 1
+
+
+def test_distill_loss_matches_legacy_formula():
+    torch.manual_seed(6)
+
+    pimac = PIMAC(
+        state_size=3,
+        action_space_size=2,
+        num_agents=2,
+        distill_weight=1.0,
+        token_smooth_weight=0.0,
+    )
+
+    ctx_pred = torch.randn(2, 1, 3, 4)
+    logvar_pred = torch.randn(2, 1, 3, 4)
+    teacher_ctx = torch.randn(2, 1, 3, 4)
+    active_mask = torch.ones(2, 1, 3)
+    time_mask = torch.ones(2, 1)
+
+    loss = pimac._distill_loss(ctx_pred, logvar_pred, teacher_ctx, active_mask, time_mask)
+
+    logvar = torch.clamp(logvar_pred, min=-10.0, max=10.0)
+    err = (ctx_pred - teacher_ctx).pow(2)
+    per = (torch.exp(-logvar) * err + logvar).mean(dim=-1)
+    weights = active_mask * time_mask.unsqueeze(-1)
+    denom = weights.sum().clamp(min=1.0)
+    expected = (per * weights).sum() / denom
+
+    assert torch.allclose(loss, expected)
 
 
 def test_parallel_api_smoke():

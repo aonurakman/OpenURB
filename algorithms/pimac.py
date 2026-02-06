@@ -54,6 +54,7 @@ class PIMACAgentRNN(nn.Module):
         num_hidden: int,
         widths: Sequence[int],
         ctx_dim: int,
+        obs_skip: bool = False,
         obs_index_dim: int = 3,
     ):
         super().__init__()
@@ -73,6 +74,8 @@ class PIMACAgentRNN(nn.Module):
         self.ctx_head = nn.Linear(int(rnn_hidden_dim), int(ctx_dim))
         self.logvar_head = nn.Linear(int(rnn_hidden_dim), int(ctx_dim))
         self.film = nn.Linear(int(ctx_dim), int(2 * rnn_hidden_dim))
+
+        self.obs_skip = nn.Linear(int(obs_dim), int(rnn_hidden_dim)) if obs_skip else None
 
         # Residual conditioning from observation indices (static role/task features).
         effective_index_dim = min(int(obs_index_dim), int(obs_dim))
@@ -99,6 +102,8 @@ class PIMACAgentRNN(nn.Module):
         logvar_pred = self.logvar_head(out)  # [B, T, ctx_dim]
 
         h = out
+        if self.obs_skip is not None:
+            h = h + self.obs_skip(obs_seq)
         if self.index_proj is not None:
             idx = obs_seq[:, :, -self.obs_index_dim :]  # [B, T, K]
             h = h + self.index_proj(idx)
@@ -106,6 +111,7 @@ class PIMACAgentRNN(nn.Module):
         gamma_beta = self.film(ctx_pred)
         gamma, beta = torch.chunk(gamma_beta, 2, dim=-1)
         gate = torch.sigmoid(-logvar_pred.mean(dim=-1, keepdim=True))
+        gate = torch.clamp(gate, min=0.0, max=1.0)
         h_film = (1.0 + gate * gamma) * h + gate * beta
 
         q = self.out(h_film)  # [B, T, A]
@@ -121,7 +127,6 @@ class SetTokenTeacher(nn.Module):
         num_tokens: int,
         tok_dim: int,
         ctx_dim: int,
-        action_dim: Optional[int] = None,
         emb_dim: int = 128,
         hidden_sizes: Sequence[int] = (128, 128),
         attn_dim: Optional[int] = None,
@@ -142,17 +147,17 @@ class SetTokenTeacher(nn.Module):
         self.v_proj = nn.Linear(self.tok_dim, self.attn_dim)
         self.out_proj = nn.Linear(self.attn_dim, self.ctx_dim)
 
-        self.action_dim = int(action_dim) if action_dim is not None else None
-        self.action_hist_head = None
-        if self.action_dim is not None:
-            self.action_hist_head = _build_mlp(self.tok_dim, hidden_sizes, self.action_dim)
-
     def _masked_mean(self, u: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         weights = mask.unsqueeze(-1)
         denom = weights.sum(dim=2).clamp(min=1.0)
         return (u * weights).sum(dim=2) / denom
 
-    def forward(self, x: torch.Tensor, active_mask: torch.Tensor, pool_mask: torch.Tensor):
+    def forward(
+        self,
+        x: torch.Tensor,
+        active_mask: torch.Tensor,
+        pool_mask: torch.Tensor,
+    ):
         # x: [B, T, N, D]
         b, t, n, d = x.shape
         u = self.agent_mlp(x.reshape(b * t * n, d)).reshape(b, t, n, -1)
@@ -171,14 +176,6 @@ class SetTokenTeacher(nn.Module):
         ctx = (attn.unsqueeze(-1) * v.unsqueeze(2)).sum(dim=3)
         ctx = self.out_proj(ctx)
         return tok, ctx
-
-    def predict_action_hist(self, tokens: torch.Tensor) -> Optional[torch.Tensor]:
-        if self.action_hist_head is None:
-            return None
-        b, t, _, _ = tokens.shape
-        tok_mean = tokens.mean(dim=2)
-        logits = self.action_hist_head(tok_mean.reshape(b * t, -1)).reshape(b, t, self.action_dim)
-        return logits
 
 
 class PIMAC(BaseLearningModel):
@@ -209,10 +206,10 @@ class PIMAC(BaseLearningModel):
         teacher_attn_dim: Optional[int] = None,
         teacher_drop_prob: float = 0.5,
         distill_weight: float = 1.0,
-        teacher_aux_weight: float = 1.0,
         token_smooth_weight: float = 0.0,
-        teacher_use_actions: bool = True,
         obs_index_dim: int = 3,
+        obs_skip: bool = False,
+        context_gate_reg: float = 0.0,
         max_grad_norm: float = 10.0,
         gamma: float = 0.99,
         target_update_every: int = 200,
@@ -260,9 +257,9 @@ class PIMAC(BaseLearningModel):
         self.tok_dim = int(tok_dim) if tok_dim is not None else int(ctx_dim)
         self.teacher_drop_prob = float(teacher_drop_prob)
         self.distill_weight = float(distill_weight)
-        self.teacher_aux_weight = float(teacher_aux_weight)
         self.token_smooth_weight = float(token_smooth_weight)
-        self.teacher_use_actions = bool(teacher_use_actions)
+        self.obs_skip = bool(obs_skip)
+        self.context_gate_reg = float(context_gate_reg)
 
         self._learn_steps = 0
 
@@ -274,6 +271,7 @@ class PIMAC(BaseLearningModel):
                 num_hidden=int(num_hidden),
                 widths=widths,
                 ctx_dim=int(ctx_dim),
+                obs_skip=self.obs_skip,
                 obs_index_dim=int(obs_index_dim),
             ).to(self.device)
             self.target_agent_net = copy.deepcopy(self.agent_net).to(self.device)
@@ -292,6 +290,7 @@ class PIMAC(BaseLearningModel):
                         num_hidden=int(num_hidden),
                         widths=widths,
                         ctx_dim=int(ctx_dim),
+                        obs_skip=self.obs_skip,
                         obs_index_dim=int(obs_index_dim),
                     ).to(self.device)
                     for _ in range(self.num_agents)
@@ -300,13 +299,12 @@ class PIMAC(BaseLearningModel):
             self.target_agent_nets = copy.deepcopy(self.agent_nets).to(self.device)
             self.target_agent_nets.eval()
 
-        teacher_in_dim = self.obs_size + (self.action_space_size if self.teacher_use_actions else 0)
+        teacher_in_dim = self.obs_size
         self.teacher = SetTokenTeacher(
             in_dim=teacher_in_dim,
             num_tokens=self.num_tokens,
             tok_dim=self.tok_dim,
             ctx_dim=self.ctx_dim,
-            action_dim=self.action_space_size,
             emb_dim=int(teacher_emb_dim),
             hidden_sizes=teacher_hidden_sizes,
             attn_dim=teacher_attn_dim,
@@ -321,6 +319,7 @@ class PIMAC(BaseLearningModel):
 
         self.loss: list[float] = []
         self.last_losses: dict[str, float] = {}
+        self.loss_history: list[dict[str, float]] = []
         self._inference_hidden: dict[object, torch.Tensor] = {}
 
     def _agent_parameters(self):
@@ -866,18 +865,9 @@ class PIMAC(BaseLearningModel):
     ) -> torch.Tensor:
         logvar = torch.clamp(logvar_pred, min=-10.0, max=10.0)
         err = (ctx_pred - teacher_ctx.detach()).pow(2)
-        per = (torch.exp(-logvar) * err + logvar).mean(dim=-1)
         weights = active_mask * time_mask.unsqueeze(-1)
-        denom = weights.sum().clamp(min=1.0)
-        return (per * weights).sum() / denom
-
-    def _action_histogram(self, actions: torch.Tensor, active_mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        one_hot = F.one_hot(actions.clamp(min=0), num_classes=self.action_space_size).to(dtype=torch.float32)
-        counts = (one_hot * active_mask.unsqueeze(-1)).sum(dim=2)
-        active_counts = active_mask.sum(dim=2)
-        denom = active_counts.clamp(min=1.0)
-        hist = counts / denom.unsqueeze(-1)
-        return hist, active_counts
+        per = (torch.exp(-logvar) * err + logvar).mean(dim=-1)
+        return (per * weights).sum() / weights.sum().clamp(min=1.0)
 
     def learn(self) -> None:
         if len(self.memory) < self.batch_size:
@@ -1054,35 +1044,29 @@ class PIMAC(BaseLearningModel):
                     acc = acc + (td_sub * time_mask).sum() / time_mask.sum().clamp(min=1.0)
                 subteam_td_loss = acc / float(self.subteam_samples)
 
+            gate_reg = torch.tensor(0.0, device=self.device)
+            if self.context_gate_reg > 0.0:
+                gate = torch.sigmoid(-logvar_pred.mean(dim=-1))
+                gate = torch.clamp(gate, min=0.0, max=1.0)
+                gate_weights = combined_mask * time_mask.unsqueeze(-1)
+                gate_reg = (gate.pow(2) * gate_weights).sum() / gate_weights.sum().clamp(min=1.0)
+
             distill_loss = torch.tensor(0.0, device=self.device)
-            teacher_aux_loss = torch.tensor(0.0, device=self.device)
             teacher_smooth = torch.tensor(0.0, device=self.device)
 
             need_teacher = (
                 self.distill_weight > 0.0
-                or self.teacher_aux_weight > 0.0
                 or self.token_smooth_weight > 0.0
             )
             if need_teacher:
                 teacher_in = obs
-                if self.teacher_use_actions:
-                    action_one_hot = F.one_hot(safe_actions, num_classes=self.action_space_size).to(dtype=torch.float32)
-                    teacher_in = torch.cat([teacher_in, action_one_hot], dim=-1)
 
                 pool_mask = self._teacher_pool_mask(combined_mask)
                 tokens, teacher_ctx = self.teacher(teacher_in, active_mask=combined_mask, pool_mask=pool_mask)
 
                 # Teacher outputs are detached for distillation; execution uses local ctx_pred only.
-                distill_loss = self._distill_loss(ctx_pred, logvar_pred, teacher_ctx, combined_mask, time_mask)
-
-                if self.teacher_aux_weight > 0.0:
-                    hist_logits = self.teacher.predict_action_hist(tokens)
-                    if hist_logits is not None:
-                        pred_hist = F.softmax(hist_logits, dim=-1)
-                        target_hist, active_counts = self._action_histogram(actions, combined_mask)
-                        mse = (pred_hist - target_hist).pow(2).mean(dim=-1)
-                        hist_weights = time_mask * (active_counts > 0.0).to(dtype=time_mask.dtype)
-                        teacher_aux_loss = (mse * hist_weights).sum() / hist_weights.sum().clamp(min=1.0)
+                if self.distill_weight > 0.0:
+                    distill_loss = self._distill_loss(ctx_pred, logvar_pred, teacher_ctx, combined_mask, time_mask)
 
                 if self.token_smooth_weight > 0.0 and tokens.shape[1] > 1:
                     diff = tokens[:, 1:] - tokens[:, :-1]
@@ -1095,10 +1079,10 @@ class PIMAC(BaseLearningModel):
                 agent_loss = agent_loss + self.subteam_td_weight * subteam_td_loss
             if self.distill_weight > 0.0:
                 agent_loss = agent_loss + self.distill_weight * distill_loss
+            if self.context_gate_reg > 0.0:
+                agent_loss = agent_loss + self.context_gate_reg * gate_reg
 
-            teacher_loss = (
-                self.teacher_aux_weight * teacher_aux_loss + self.token_smooth_weight * teacher_smooth
-            )
+            teacher_loss = self.token_smooth_weight * teacher_smooth
 
             self.optimizer.zero_grad()
             agent_loss.backward()
@@ -1121,11 +1105,12 @@ class PIMAC(BaseLearningModel):
                 "td": float(td_loss.detach().item()),
                 "subteam_td": float(subteam_td_loss.detach().item()),
                 "distill": float(distill_loss.detach().item()),
-                "teacher_aux": float(teacher_aux_loss.detach().item()),
                 "teacher_smooth": float(teacher_smooth.detach().item()),
+                "context_gate_reg": float(gate_reg.detach().item()),
                 "agent_loss": float(agent_loss.detach().item()),
                 "teacher_loss": float(teacher_loss.detach().item()),
             }
+            self.loss_history.append(self.last_losses.copy())
 
         self.loss.append(float(sum(step_losses) / len(step_losses)))
         self.decay_temperature()

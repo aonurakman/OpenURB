@@ -91,7 +91,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     ALGORITHM = "pimac"
-    VERSION = "1"
+    VERSION = "2"
     EXP_TYPE = "open"
     exp_id = args.id
     alg_config = args.alg_conf
@@ -324,9 +324,7 @@ if __name__ == "__main__":
         teacher_attn_dim=globals().get("teacher_attn_dim", None),
         teacher_drop_prob=globals().get("teacher_drop_prob", 0.5),
         distill_weight=globals().get("distill_weight", 1.0),
-        teacher_aux_weight=globals().get("teacher_aux_weight", 1.0),
         token_smooth_weight=globals().get("token_smooth_weight", 0.0),
-        teacher_use_actions=globals().get("teacher_use_actions", True),
         max_grad_norm=max_grad_norm,
         gamma=gamma,
         target_update_every=target_update_every,
@@ -337,6 +335,8 @@ if __name__ == "__main__":
         use_huber_loss=use_huber_loss,
         normalize_by_active=globals().get("normalize_by_active", True),
         obs_index_dim=globals().get("obs_index_dim", 3),
+        obs_skip=globals().get("obs_skip", False),
+        context_gate_reg=globals().get("context_gate_reg", 0.0),
         subteam_samples=globals().get("subteam_samples", 0),
         subteam_keep_prob=globals().get("subteam_keep_prob", 0.75),
         subteam_td_weight=globals().get("subteam_td_weight", 0.5),

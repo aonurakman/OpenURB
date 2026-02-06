@@ -215,3 +215,7 @@ external_tasks/.mplconfig/
 servers/
 todo.txt
 archive/
+
+# Local agent guidance (generated, not committed)
+AGENTS.md
+.agents/

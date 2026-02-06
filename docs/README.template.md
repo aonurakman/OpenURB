@@ -20,6 +20,10 @@ The task is to develop and evaluate RL methods that enable AV agents to learn ro
 
 `MARL`, `route choice`, `open environment`, `ad-hoc teamwork`, `few-shot cooperation`
 
+## Agent Guidance (Local)
+
+If you are a coding agent working in this repo, read `AGENTS.md` and the docs under `.agents/` before making changes. These files are gitignored and live locally.
+
 ## 🔗 Workflow
 
 `OpenURB` (similar to `URB`):
@@ -83,7 +87,7 @@ where
 - ```<exp_id>``` is an optional experiment identifier, for instance ```random_ing```,
 - ```<hyperparam_id>``` is the hyperparameterization identifier, it must correspond to a `.json` filename (without extension) in [`config/algo_config`](config/algo_config/). Provided scripts automatically select the algorithm-specific subfolder in this directory.
 - ```<env_conf_id>``` is the environment configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/env_config`](config/env_config/). It is used to parameterize environment-specific processes, such as path generation, disk operations, etc. It is **optional** and by default is set to `config1`.
-- ```<task_id>``` is the task configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/task_config`](config/task_config/). For this repo, use configs with `dynamic` in the name.
+- ```<task_id>``` is the task configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/task_config`](config/task_config/). For this repo, use the provided task configs (e.g., `config1`–`config5`) which already encode dynamic switching parameters.
 - ```<net_name>``` is the name of the network you wish to use. Must be one of the folder names in ```networks/``` i.e. ```ing_small```, ```ingolstadt_custom```, ```nangis```, ```nemours```, ```provins``` or ```saint_arnoult```,
 - ```<env_seed>``` is reproducibility random seed for the traffic environment, it is **optional** and by default is set to 42,
 - ```<torch_seed>``` is reproducibility random seed for PyTorch, it is **optional** and by default is set to 42.
@@ -95,29 +99,29 @@ If the generated ID already exists under `results/`, `_repeated` is appended.
 
 For example, the following command runs an experiment using:
 - IQL algorithm, hyperparameterized by `config/algo_config/iql/config1.json`,
-- The task specified in `config/task_config/dynamic1.json`,
+- The task specified in `config/task_config/config1.json`,
 - The environment parameterization specified in `config/env_config/config1.json` (by default),
 - Experiment identifier `deneme`, which will be used as the folder name in `results/` to save the experiment data,
 - Saint Arnoult network and demand, from `networks/saint_arnoult`,
 - Environment (also used for `random` and `numpy`) and PyTorch seeds 42 and 0, respectively.
 
 ```bash
-python scripts/open_iql.py --id deneme --alg-conf config1 --task-conf dynamic1 --net saint_arnoult --env-seed 42 --torch-seed 0
+python scripts/open_iql.py --id deneme --alg-conf config1 --task-conf config1 --net saint_arnoult --env-seed 42 --torch-seed 0
 ```
 
 Example for QMIX:
 
 ```bash
-python scripts/open_qmix.py --id deneme_qmix --alg-conf config1 --task-conf dynamic1 --net saint_arnoult --env-seed 42 --torch-seed 0
+python scripts/open_qmix.py --id deneme_qmix --alg-conf config1 --task-conf config1 --net saint_arnoult --env-seed 42 --torch-seed 0
 ```
 
 Example for VDN:
 
 ```bash
-python scripts/open_vdn.py --id deneme_vdn --alg-conf config1 --task-conf dynamic1 --net saint_arnoult --env-seed 42 --torch-seed 0
+python scripts/open_vdn.py --id deneme_vdn --alg-conf config1 --task-conf config1 --net saint_arnoult --env-seed 42 --torch-seed 0
 ```
 
-> All experiment scripts in this repo expect task configs with `dynamic` in the name.
+> All experiment scripts in this repo expect task configs from `config/task_config/`; those files define the dynamic switching parameters.
 
 #### Usage **URB** for baselines
 
@@ -128,12 +132,12 @@ python scripts/open_baselines.py [--id <exp_id>] --alg-conf <hyperparam_id> --en
 ```
 
 For a list of available baseline models, see the **Baseline models** section below.
-The open baseline scripts mirror the dynamic switching behavior: use task configs with `dynamic` in the name, and `cond_open_baselines.py` conditions switches on group travel times.
+The open baseline scripts mirror the dynamic switching behavior: use task configs from `config/task_config/`, and `cond_open_baselines.py` conditions switches on group travel times.
 
 For example:
 
 ```bash
-python scripts/open_baselines.py --id ing_aon --alg-conf config1 --task-conf dynamic2 --net ingolstadt_custom --model aon
+python scripts/open_baselines.py --id ing_aon --alg-conf config1 --task-conf config2 --net ingolstadt_custom --model aon
 ```
 
 <!-- INCLUDE: ../scripts/readme.md -->

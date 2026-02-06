@@ -14,7 +14,7 @@ We provide training scripts for open vs. conditional switching variants:
 
 Baseline scripts are `open_baselines.py` and `cond_open_baselines.py` (see `baseline_models/readme.md`
 for available models). The open variants run dynamic switching (conditional in the `cond_` version)
-and require task configs with `dynamic` in the name.
+and require task configs from `config/task_config/`.
 
 All scripts automatically run `analysis/metrics.py` at the end of an experiment to generate KPI outputs
 in the experiment's `results/<exp_id>/metrics/` folder.

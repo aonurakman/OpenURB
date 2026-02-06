@@ -9,7 +9,9 @@ import numpy as np
 import torch
 
 from algorithms.pimac import PIMAC
-from external_tasks.common import make_run_dir, plot_curves, save_gif, set_global_seeds
+from external_tasks.common import make_run_dir, moving_average, save_gif, set_global_seeds
+
+import matplotlib.pyplot as plt
 
 MIN_AGENTS = 3
 MAX_AGENTS = 10
@@ -63,6 +65,115 @@ def close_env_cache(env_cache: dict) -> None:
         env.close()
 
 
+def _build_loss_series(loss_history: list[dict[str, float]]) -> dict[str, np.ndarray]:
+    if not loss_history:
+        return {}
+    preferred = [
+        "td",
+        "subteam_td",
+        "distill",
+        "teacher_smooth",
+        "context_gate_reg",
+        "agent_loss",
+        "teacher_loss",
+    ]
+    keys = []
+    existing = {k for entry in loss_history for k in entry.keys()}
+    for key in preferred:
+        if key in existing:
+            keys.append(key)
+    for key in sorted(existing - set(keys)):
+        keys.append(key)
+    return {key: np.asarray([entry.get(key, 0.0) for entry in loss_history], dtype=np.float32) for key in keys}
+
+
+def _should_log_scale(series: dict[str, np.ndarray], threshold: float = 100.0) -> bool:
+    if not series:
+        return False
+    values = np.concatenate([v for v in series.values() if v.size])
+    values = values[np.isfinite(values) & (values > 0.0)]
+    if values.size < 2:
+        return False
+    return float(values.max() / values.min()) >= threshold
+
+
+def plot_pimac_curves(
+    save_path: str,
+    episode_rewards: list[float],
+    eval_steps: list[int],
+    eval_means: list[float],
+    eval_stds: list[float],
+    loss_history: list[dict[str, float]],
+    window: int = 50,
+) -> None:
+    rewards_np = np.asarray(episode_rewards, dtype=np.float32)
+    eval_steps_np = np.asarray(eval_steps, dtype=np.int64)
+    eval_means_np = np.asarray(eval_means, dtype=np.float32)
+    eval_stds_np = np.asarray(eval_stds, dtype=np.float32)
+    loss_series = _build_loss_series(loss_history)
+
+    fig, axes = plt.subplots(3, 1, figsize=(12, 12))
+
+    if rewards_np.size:
+        episodes = np.arange(1, rewards_np.size + 1)
+        axes[0].plot(episodes, rewards_np, color="tab:blue", alpha=0.35, label="train return")
+        if rewards_np.size >= window:
+            smooth = moving_average(rewards_np, window)
+            smooth_x = np.arange(window, window + smooth.size)
+        else:
+            smooth = rewards_np
+            smooth_x = episodes
+        axes[0].plot(smooth_x, smooth, color="tab:orange", linewidth=2, label=f"train {window}-ep moving avg")
+    axes[0].set_ylabel("Train return")
+    axes[0].grid(True, alpha=0.3)
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        axes[0].legend()
+
+    if eval_means_np.size:
+        axes[1].plot(eval_steps_np, eval_means_np, marker="o", color="tab:orange", label="eval mean")
+        if eval_stds_np.size:
+            axes[1].fill_between(
+                eval_steps_np,
+                eval_means_np - eval_stds_np,
+                eval_means_np + eval_stds_np,
+                color="tab:orange",
+                alpha=0.2,
+                label="eval std",
+            )
+    axes[1].set_ylabel("Eval return")
+    axes[1].grid(True, alpha=0.3)
+    handles, labels = axes[1].get_legend_handles_labels()
+    if handles:
+        axes[1].legend()
+
+    log_scale = _should_log_scale(loss_series)
+    if loss_series:
+        eps = 1e-8
+        for key, values in loss_series.items():
+            if not values.size:
+                continue
+            plot_values = np.maximum(values, eps) if log_scale else values
+            axes[2].plot(np.arange(1, values.size + 1), plot_values, label=key, linewidth=1.2, alpha=0.85)
+        if log_scale:
+            axes[2].set_yscale("log")
+            axes[2].set_ylabel("Loss (log scale)")
+        else:
+            axes[2].set_ylabel("Loss")
+        handles, labels = axes[2].get_legend_handles_labels()
+        if handles:
+            axes[2].legend(ncol=2, fontsize=8)
+    else:
+        axes[2].set_ylabel("Loss")
+        axes[2].text(0.5, 0.5, "No loss history yet", ha="center", va="center", transform=axes[2].transAxes)
+    axes[2].set_xlabel("Learner update")
+    axes[2].grid(True, alpha=0.3)
+
+    fig.tight_layout()
+    fig.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+
 def main():
     seed = 42
     episodes = 15000
@@ -108,10 +219,10 @@ def main():
         teacher_attn_dim=None,
         teacher_drop_prob=0.5,
         distill_weight=0.5,
-        teacher_aux_weight=1.0,
         token_smooth_weight=0.0,
-        teacher_use_actions=True,
         obs_index_dim=0,
+        obs_skip=True,
+        context_gate_reg=0.001,
         subteam_samples=0,
         subteam_keep_prob=0.75,
         subteam_td_weight=0.25,
@@ -132,7 +243,9 @@ def main():
 
     episode_rewards = []
     episode_losses = []
-    eval_rewards = []
+    eval_steps = []
+    eval_means = []
+    eval_stds = []
     global_step = 0
     best_eval = -float("inf")
 
@@ -148,7 +261,7 @@ def main():
 
     eval_counts = eval_agent_counts()
 
-    def run_eval(start_seed: int) -> float:
+    def run_eval(start_seed: int) -> tuple[float, float]:
         temp_backup = pimac.temperature
         pimac.temperature = 0.0
         pimac.set_eval_mode()
@@ -182,7 +295,7 @@ def main():
 
         pimac.temperature = temp_backup
         pimac.set_train_mode()
-        return float(np.mean(returns))
+        return float(np.mean(returns)), float(np.std(returns))
 
     for ep in range(episodes):
         n_agents = episode_agent_count(ep)
@@ -278,10 +391,12 @@ def main():
         episode_losses.append(ep_loss)
 
         if eval_every_episodes and ((ep + 1) % eval_every_episodes == 0):
-            current_eval = run_eval(seed + 10_000 + ep)
-            eval_rewards.append(current_eval)
-            if current_eval > (best_eval + min_improve):
-                best_eval = current_eval
+            eval_mean, eval_std = run_eval(seed + 10_000 + ep)
+            eval_steps.append(ep + 1)
+            eval_means.append(eval_mean)
+            eval_stds.append(eval_std)
+            if eval_mean > (best_eval + min_improve):
+                best_eval = eval_mean
                 torch.save(
                     {
                         "env_name": "simple_spread_dynamic_v3",
@@ -294,11 +409,13 @@ def main():
                 )
 
         if (ep + 1) % 200 == 0:
-            plot_curves(
+            plot_pimac_curves(
                 os.path.join(out_dir, "learning_curves.png"),
                 episode_rewards,
-                episode_losses,
-                eval_rewards,
+                eval_steps,
+                eval_means,
+                eval_stds,
+                pimac.loss_history,
                 window=50,
             )
             print(
@@ -306,10 +423,20 @@ def main():
                 f"loss={episode_losses[-1]:.5f} temp={pimac.temperature:.3f}"
             )
 
-    plot_curves(os.path.join(out_dir, "learning_curves.png"), episode_rewards, episode_losses, eval_rewards, window=50)
+    plot_pimac_curves(
+        os.path.join(out_dir, "learning_curves.png"),
+        episode_rewards,
+        eval_steps,
+        eval_means,
+        eval_stds,
+        pimac.loss_history,
+        window=50,
+    )
     np.save(os.path.join(out_dir, "episode_rewards.npy"), np.asarray(episode_rewards, dtype=np.float32))
     np.save(os.path.join(out_dir, "episode_losses.npy"), np.asarray(episode_losses, dtype=np.float32))
-    np.save(os.path.join(out_dir, "eval_rewards.npy"), np.asarray(eval_rewards, dtype=np.float32))
+    np.save(os.path.join(out_dir, "eval_rewards.npy"), np.asarray(eval_means, dtype=np.float32))
+    np.save(os.path.join(out_dir, "eval_stds.npy"), np.asarray(eval_stds, dtype=np.float32))
+    np.save(os.path.join(out_dir, "eval_steps.npy"), np.asarray(eval_steps, dtype=np.int64))
     print(f"Saved results to {out_dir}")
 
     if os.path.exists(best_ckpt_path):
