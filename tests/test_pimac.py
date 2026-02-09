@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import torch
 
-from algorithms.pimac import PIMAC, PIMACActorRNN, SetTokenTeacher
+from algorithms.pimac import PIMAC, PIMACAEC, PIMACParallel, PIMACActorRNN, SetTokenTeacher
 
 
 def test_network_width_mismatch_raises():
@@ -70,11 +70,11 @@ def test_set_token_teacher_all_inactive_is_finite():
     assert torch.allclose(ctx, torch.zeros_like(ctx), atol=1e-7)
 
 
-def test_act_respects_action_mask_when_deterministic():
+def test_act_uses_argmax_when_deterministic():
     np.random.seed(0)
     torch.manual_seed(0)
 
-    pimac = PIMAC(
+    pimac = PIMACAEC(
         state_size=3,
         action_space_size=4,
         num_agents=1,
@@ -85,7 +85,6 @@ def test_act_respects_action_mask_when_deterministic():
         num_hidden=1,
         widths=(8, 8),
         rnn_hidden_dim=8,
-        share_parameters=True,
         tok_dim=8,
     )
     pimac.reset_episode()
@@ -103,13 +102,12 @@ def test_act_respects_action_mask_when_deterministic():
         pimac.actor_net.policy_head.bias.copy_(torch.tensor([0.0, 1.0, 2.0, 3.0]))
 
     obs = np.array([0.1, -0.2, 0.3], dtype=np.float32)
-    action_mask = np.array([1, 1, 1, 0], dtype=np.int8)
-    action = pimac.act(obs, action_mask=action_mask, agent_index=0)
-    assert action == 2
+    action = pimac.act(obs, agent_index=0)
+    assert action == 3
 
 
 def test_gae_matches_manual_recursion():
-    pimac = PIMAC(state_size=2, action_space_size=2, num_agents=2, gamma=0.9, gae_lambda=0.8)
+    pimac = PIMACAEC(state_size=2, action_space_size=2, num_agents=2, gamma=0.9, gae_lambda=0.8)
 
     rewards = np.array([1.0, 2.0], dtype=np.float32)
     values = np.array([0.5, 0.2], dtype=np.float32)
@@ -134,7 +132,7 @@ def test_store_episode_finalization_contains_ppo_fields():
     np.random.seed(1)
     torch.manual_seed(1)
 
-    pimac = PIMAC(state_size=4, action_space_size=3, num_agents=3, buffer_size=8, batch_size=1)
+    pimac = PIMACAEC(state_size=4, action_space_size=3, num_agents=3, buffer_size=8, batch_size=1)
 
     obs = np.random.randn(3, 4).astype(np.float32)
     actions = np.array([0, 1, 2], dtype=np.int64)
@@ -154,7 +152,7 @@ def test_learn_updates_parameters_and_logs_vnext_metrics():
     np.random.seed(2)
     torch.manual_seed(2)
 
-    pimac = PIMAC(
+    pimac = PIMACAEC(
         state_size=3,
         action_space_size=2,
         num_agents=2,
@@ -225,7 +223,7 @@ def test_variable_n_batching_smoke():
     np.random.seed(3)
     torch.manual_seed(3)
 
-    pimac = PIMAC(
+    pimac = PIMACAEC(
         state_size=4,
         action_space_size=3,
         num_agents=7,
@@ -240,7 +238,6 @@ def test_variable_n_batching_smoke():
         tok_dim=16,
         teacher_hidden_sizes=(16, 16),
         critic_hidden_sizes=(16, 16),
-        share_parameters=True,
     )
 
     obs_a = np.random.randn(3, 4).astype(np.float32)
@@ -265,7 +262,7 @@ def test_parallel_api_smoke():
     np.random.seed(4)
     torch.manual_seed(4)
 
-    pimac = PIMAC(state_size=3, action_space_size=4, num_agents=5, share_parameters=True)
+    pimac = PIMACParallel(state_size=3, action_space_size=4, num_agents=5)
     obs_dict = {f"agent_{i}": np.random.randn(3).astype(np.float32) for i in range(5)}
     action_dict = pimac.act_parallel(obs_dict)
 
@@ -276,7 +273,7 @@ def test_aec_cycle_storage_smoke():
     np.random.seed(5)
     torch.manual_seed(5)
 
-    pimac = PIMAC(state_size=3, action_space_size=4, num_agents=3, buffer_size=8, batch_size=1)
+    pimac = PIMACAEC(state_size=3, action_space_size=4, num_agents=3, buffer_size=8, batch_size=1)
     agent_ids = ["a", "b", "c"]
     pimac.aec_begin_cycle(agent_ids)
 
@@ -286,3 +283,78 @@ def test_aec_cycle_storage_smoke():
 
     pimac.aec_end_cycle(done_all=True)
     assert len(pimac.memory) == 1
+
+
+def test_pimac_alias_points_to_aec():
+    pimac = PIMAC(state_size=2, action_space_size=2, num_agents=2)
+    assert isinstance(pimac, PIMACAEC)
+
+
+def test_parallel_done_dict_without_all_key_finalizes_only_when_all_true():
+    np.random.seed(6)
+    torch.manual_seed(6)
+
+    pimac = PIMACParallel(state_size=3, action_space_size=2, num_agents=2, buffer_size=8, batch_size=1)
+    obs = {
+        "a": np.random.randn(3).astype(np.float32),
+        "b": np.random.randn(3).astype(np.float32),
+    }
+    actions = {"a": 0, "b": 1}
+    rewards = {"a": 0.5, "b": -0.25}
+    next_obs = {
+        "a": np.random.randn(3).astype(np.float32),
+        "b": np.random.randn(3).astype(np.float32),
+    }
+
+    pimac.store_parallel_step(obs, actions, rewards, next_obs, done_dict={"a": False, "b": True})
+    assert len(pimac.memory) == 0
+
+    pimac.store_parallel_step(obs, actions, rewards, next_obs, done_dict={"a": True, "b": True})
+    assert len(pimac.memory) == 1
+
+    pimac_2 = PIMACParallel(state_size=3, action_space_size=2, num_agents=2, buffer_size=8, batch_size=1)
+    pimac_2.store_parallel_step(obs, actions, rewards, next_obs, done_dict={"__all__": True, "a": False, "b": False})
+    assert len(pimac_2.memory) == 1
+
+
+def test_parallel_terminal_empty_next_obs_dict_finalizes_without_crash():
+    np.random.seed(8)
+    torch.manual_seed(8)
+
+    pimac = PIMACParallel(state_size=3, action_space_size=2, num_agents=2, buffer_size=8, batch_size=1)
+    obs = {
+        "a": np.random.randn(3).astype(np.float32),
+        "b": np.random.randn(3).astype(np.float32),
+    }
+    actions = {"a": 0, "b": 1}
+    rewards = {"a": 0.5, "b": -0.25}
+
+    # Regression case: terminal step reports no next observations.
+    pimac.store_parallel_step(obs, actions, rewards, next_obs_dict={}, done_dict={"__all__": True})
+
+    assert len(pimac.memory) == 1
+    ep = pimac.memory[0]
+    assert ep["next_active_mask"].shape == (1, 2)
+    np.testing.assert_array_equal(ep["next_active_mask"][0], np.zeros(2, dtype=np.float32))
+
+
+def test_parallel_act_accepts_non_integer_agent_ids():
+    np.random.seed(7)
+    torch.manual_seed(7)
+
+    pimac = PIMACParallel(state_size=4, action_space_size=3, num_agents=2)
+    obs_step1 = {
+        "agent_alpha": np.random.randn(4).astype(np.float32),
+        "agent_beta": np.random.randn(4).astype(np.float32),
+    }
+    actions_step1 = pimac.act_parallel(obs_step1)
+    assert set(actions_step1.keys()) == set(obs_step1.keys())
+
+    obs_step2 = {
+        "agent_beta": np.random.randn(4).astype(np.float32),
+        "agent_alpha": np.random.randn(4).astype(np.float32),
+    }
+    actions_step2 = pimac.act_parallel(obs_step2)
+    assert set(actions_step2.keys()) == set(obs_step2.keys())
+    action_single = pimac.act(np.random.randn(4).astype(np.float32), agent_index=("tuple", 1))
+    assert isinstance(action_single, int)

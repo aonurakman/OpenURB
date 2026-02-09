@@ -33,7 +33,7 @@ from routerl import TrafficEnvironment
 from routerl import MachineAgent
 from tqdm import tqdm
 
-from algorithms.pimac import PIMAC
+from algorithms.pimac import PIMACAEC
 from utils import clear_SUMO_files
 from utils import ensure_recorder_flush
 from utils import finish_wandb_run
@@ -47,33 +47,16 @@ from utils import finish_runtime_tracking
 from utils import save_mean_loss_plot
 
 
-def extract_action_mask(observation, info, action_space_size):
-    """Extract an action mask if present and return a clean observation array."""
-    action_mask = None
+def coerce_observation(observation):
+    """
+    Convert environment observations into the actor-ready float32 vector format.
+
+    RouteRL may return direct vectors or wrappers containing "observation"/"obs".
+    """
     obs = observation
     if isinstance(observation, dict):
-        # PettingZoo sometimes wraps observations as {"observation": ..., "action_mask": ...}.
-        action_mask = observation.get("action_mask")
         obs = observation.get("observation", observation.get("obs", observation))
-
-    if action_mask is None and isinstance(info, dict):
-        # Some environments provide the mask via info instead.
-        action_mask = info.get("action_mask")
-
-    if action_mask is not None:
-        # Force mask into a flat {0,1} array aligned to action_space_size.
-        # Note: action masks apply to *actions of the currently-selected agent* (AEC),
-        # not to "which agents are allowed to act".
-        action_mask = np.asarray(action_mask, dtype=np.int8).reshape(-1)
-        if action_mask.shape[0] < action_space_size:
-            padded = np.zeros(action_space_size, dtype=np.int8)
-            padded[: action_mask.shape[0]] = action_mask
-            action_mask = padded
-        elif action_mask.shape[0] > action_space_size:
-            action_mask = action_mask[:action_space_size]
-
-    obs = np.asarray(obs, dtype=np.float32)
-    return obs, action_mask
+    return np.asarray(obs, dtype=np.float32)
 
 
 # Main script to run the PI-MAC experiment
@@ -151,7 +134,6 @@ if __name__ == "__main__":
     params.update(alg_params)
     params.update(env_params)
     params.update(task_params)
-    params.setdefault("share_parameters", True)
     del params["desc"], env_params, task_params
 
     # Expose config values as local variables for consistency with other scripts.
@@ -301,7 +283,7 @@ if __name__ == "__main__":
 
     ######## Set policy for machine agents ########
     # PI-MAC learner shared by all AVs (decentralized actor + centralized token teacher-critic).
-    pimac = PIMAC(
+    pimac = PIMACAEC(
         obs_size,
         action_space_size,
         num_agents=len(agent_id_list),
@@ -320,18 +302,15 @@ if __name__ == "__main__":
         value_coef=value_coef,
         max_grad_norm=max_grad_norm,
         gamma=gamma,
-        share_parameters=share_parameters,
-        num_tokens=globals().get("num_tokens", 4),
-        tok_dim=globals().get("tok_dim", globals().get("ctx_dim", globals().get("set_embed_dim", 128))),
-        teacher_hidden_sizes=globals().get("teacher_hidden_sizes", globals().get("set_hidden_sizes", (128, 128))),
-        teacher_drop_prob=globals().get("teacher_drop_prob", 0.1),
-        teacher_ema_tau=globals().get("teacher_ema_tau", 0.01),
-        distill_weight=globals().get("distill_weight", 0.1),
-        ctx_logvar_min=globals().get("ctx_logvar_min", -6.0),
-        ctx_logvar_max=globals().get("ctx_logvar_max", 4.0),
-        set_embed_dim=globals().get("set_embed_dim", 128),
-        set_hidden_sizes=globals().get("set_hidden_sizes", (128, 128)),
-        critic_hidden_sizes=globals().get("critic_hidden_sizes", (128, 128)),
+        num_tokens=num_tokens,
+        tok_dim=tok_dim,
+        teacher_hidden_sizes=teacher_hidden_sizes,
+        teacher_drop_prob=teacher_drop_prob,
+        teacher_ema_tau=teacher_ema_tau,
+        distill_weight=distill_weight,
+        ctx_logvar_min=ctx_logvar_min,
+        ctx_logvar_max=ctx_logvar_max,
+        critic_hidden_sizes=critic_hidden_sizes,
     )
 
     for agent in env.machine_agents:
@@ -367,7 +346,7 @@ if __name__ == "__main__":
 
         for agent_id in env.agent_iter():
             observation, reward, termination, truncation, info = env.last()
-            obs, action_mask = extract_action_mask(observation, info, action_space_size)
+            obs = coerce_observation(observation)
 
             if termination or truncation:
                 # AEC: rewards are assigned when the day finishes. During the terminal
@@ -377,7 +356,7 @@ if __name__ == "__main__":
                 action = None
             else:
                 # Choose an action for the current agent only (AEC semantics).
-                action = pimac.act(obs, action_mask=action_mask, agent_index=agent_id_to_index[agent_id])
+                action = pimac.act(obs, agent_index=agent_id_to_index[agent_id])
                 idx = agent_id_to_index[agent_id]
                 obs_batch[idx] = obs
                 actions_batch[idx] = int(action)
@@ -490,12 +469,11 @@ if __name__ == "__main__":
         pimac.reset_episode()
         for agent_id in env.agent_iter():
             observation, reward, termination, truncation, info = env.last()
-            obs, action_mask = extract_action_mask(observation, info, action_space_size)
+            obs = coerce_observation(observation)
             if termination or truncation:
                 action = None
             else:
-                # Action masking is still applied during evaluation.
-                action = pimac.act(obs, action_mask=action_mask, agent_index=agent_id_to_index[agent_id])
+                action = pimac.act(obs, agent_index=agent_id_to_index[agent_id])
             env.step(action)
         pbar.update()
         last_logged_episode = log_new_episodes(wb_run, episodes_folder, last_logged_episode, "testing", env)
@@ -509,12 +487,10 @@ if __name__ == "__main__":
         json.dump(pimac.loss_history, f, indent=2)
     save_mean_loss_plot(records_folder, {row["id"]: row["losses"] for row in losses_pd.to_dict("records")})
     final_model_path = os.path.join(records_folder, "final_model.pt")
-    actor_state = pimac.actor_net.state_dict() if pimac.share_parameters else pimac.actor_nets.state_dict()
     torch.save(
         {
             "algorithm": "pimac",
-            "share_parameters": pimac.share_parameters,
-            "actor_state_dict": actor_state,
+            "actor_state_dict": pimac.actor_net.state_dict(),
             "critic_state_dict": pimac.critic.state_dict(),
         },
         final_model_path,

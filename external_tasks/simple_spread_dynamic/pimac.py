@@ -9,7 +9,7 @@ if repo_root not in sys.path:
 import numpy as np
 import torch
 
-from algorithms.pimac import PIMAC
+from algorithms.pimac import PIMACParallel
 from external_tasks.common import make_run_dir, moving_average, save_gif, set_global_seeds
 
 import matplotlib.pyplot as plt
@@ -219,12 +219,9 @@ def main():
         distill_weight=0.1,
         ctx_logvar_min=-6.0,
         ctx_logvar_max=4.0,
-        set_embed_dim=64,
-        set_hidden_sizes=(64, 64),
         critic_hidden_sizes=(64, 64),
-        share_parameters=True,
     )
-    pimac = PIMAC(obs_size, action_space_size, num_agents=MAX_AGENTS, device=device, **pimac_kwargs)
+    pimac = PIMACParallel(obs_size, action_space_size, num_agents=MAX_AGENTS, device=device, **pimac_kwargs)
 
     out_dir = make_run_dir("simple_spread_dynamic_v3", "pimac")
     best_ckpt_path = os.path.join(out_dir, "best_checkpoint.pt")
@@ -264,14 +261,15 @@ def main():
             trunc = {aid: False for aid in agent_ids}
             total = 0.0
             while True:
-                actions = {}
-                for agent_index, aid in enumerate(agent_ids):
+                obs_dict = {}
+                for aid in agent_ids:
                     if term[aid] or trunc[aid]:
                         continue
                     o = obs[aid]
                     if obs_clip is not None:
                         o = np.clip(o, -obs_clip, obs_clip).astype(np.float32, copy=False)
-                    actions[aid] = pimac.act(pad_vector(o, obs_size), agent_index=agent_index)
+                    obs_dict[aid] = pad_vector(o, obs_size)
+                actions = pimac.act_parallel(obs_dict)
                 obs, rewards, terminations, truncations, _ = env.step(actions)
                 for aid in agent_ids:
                     total += float(rewards.get(aid, 0.0))
@@ -303,7 +301,7 @@ def main():
             except Exception:
                 raw_state_before = None
 
-            actions = {}
+            obs_dict = {}
             obs_batch = np.zeros((MAX_AGENTS, obs_size), dtype=np.float32)
             actions_batch = np.zeros(MAX_AGENTS, dtype=np.int64)
             active_mask = np.zeros(MAX_AGENTS, dtype=np.float32)
@@ -314,11 +312,14 @@ def main():
                 if obs_clip is not None:
                     o = np.clip(o, -obs_clip, obs_clip).astype(np.float32, copy=False)
                 padded_obs = pad_vector(o, obs_size)
-                a = pimac.act(padded_obs, agent_index=idx)
-                actions[aid] = a
+                obs_dict[aid] = padded_obs
                 obs_batch[idx] = padded_obs
-                actions_batch[idx] = int(a)
                 active_mask[idx] = 1.0
+
+            actions = pimac.act_parallel(obs_dict)
+            for idx, aid in enumerate(agent_ids):
+                if aid in actions:
+                    actions_batch[idx] = int(actions[aid])
 
             next_obs, rewards, terminations, truncations, _ = env.step(actions)
             global_step += 1
@@ -390,9 +391,7 @@ def main():
                         "env_name": "simple_spread_dynamic_v3",
                         "seed": seed,
                         "pimac_kwargs": pimac_kwargs,
-                        "actor_state_dict": (
-                            pimac.actor_net.state_dict() if pimac.share_parameters else pimac.actor_nets.state_dict()
-                        ),
+                        "actor_state_dict": pimac.actor_net.state_dict(),
                         "critic_state_dict": pimac.critic.state_dict(),
                     },
                     best_ckpt_path,
@@ -433,10 +432,7 @@ def main():
 
     if os.path.exists(best_ckpt_path):
         ckpt = torch.load(best_ckpt_path, map_location="cpu")
-        if pimac.share_parameters:
-            pimac.actor_net.load_state_dict(ckpt["actor_state_dict"])
-        else:
-            pimac.actor_nets.load_state_dict(ckpt["actor_state_dict"])
+        pimac.actor_net.load_state_dict(ckpt["actor_state_dict"])
         pimac.critic.load_state_dict(ckpt["critic_state_dict"])
 
     pimac.set_eval_mode()
@@ -455,14 +451,15 @@ def main():
         term = {aid: False for aid in agent_ids}
         trunc = {aid: False for aid in agent_ids}
         while True:
-            actions = {}
-            for idx, aid in enumerate(agent_ids):
+            obs_dict = {}
+            for aid in agent_ids:
                 if term[aid] or trunc[aid]:
                     continue
                 o = obs[aid]
                 if obs_clip is not None:
                     o = np.clip(o, -obs_clip, obs_clip).astype(np.float32, copy=False)
-                actions[aid] = pimac.act(pad_vector(o, obs_size), agent_index=idx)
+                obs_dict[aid] = pad_vector(o, obs_size)
+            actions = pimac.act_parallel(obs_dict)
             obs, _, terminations, truncations, _ = env_viz.step(actions)
             if (step_idx % max(1, int(frame_skip))) == 0 and len(frames) < max_frames:
                 frame = env_viz.render()

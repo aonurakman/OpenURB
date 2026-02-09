@@ -2,7 +2,7 @@
 PI-MAC (pimac) implementation for OpenURB.
 
 This file implements a MAPPO-style learner with a token-teacher critic:
-- Decentralized actor policy pi(a|o) with shared parameters by default.
+- Decentralized actor policy pi(a|o) with a shared recurrent actor.
 - Centralized value critic trained through a set teacher that builds K coordination
   tokens from active-agent observations via cross-attention.
 - Actor-side context distillation from teacher per-agent context using
@@ -29,7 +29,15 @@ import torch.optim as optim
 
 from baseline_models import BaseLearningModel
 
-__all__ = ["PIMACActorRNN", "DeepSetEncoder", "SetTokenTeacher", "SetValueCritic", "PIMAC"]
+__all__ = [
+    "PIMACActorRNN",
+    "SetTokenTeacher",
+    "SetValueCritic",
+    "PIMACBase",
+    "PIMACAEC",
+    "PIMACParallel",
+    "PIMAC",
+]
 
 
 def _build_mlp(in_dim: int, hidden_sizes: Sequence[int], out_dim: int) -> nn.Sequential:
@@ -134,39 +142,6 @@ class PIMACActorRNN(nn.Module):
         return logits, hn, {"ctx_mu": ctx_mu, "ctx_logvar": ctx_logvar, "gate": gate}
 
 
-class DeepSetEncoder(nn.Module):
-    """
-    Legacy DeepSets encoder kept for compatibility.
-
-    Input:
-        obs: [B, T, N, obs_dim]
-        active_mask: [B, T, N] (0/1)
-
-    Output:
-        context: [B, T, set_embed_dim]
-    """
-
-    def __init__(
-        self,
-        obs_dim: int,
-        set_embed_dim: int,
-        set_hidden_sizes: Sequence[int] = (128, 128),
-    ):
-        super().__init__()
-        self.obs_dim = int(obs_dim)
-        self.set_embed_dim = int(set_embed_dim)
-        self.agent_mlp = _build_mlp(self.obs_dim, set_hidden_sizes, self.set_embed_dim)
-
-    def forward(self, obs: torch.Tensor, active_mask: torch.Tensor) -> torch.Tensor:
-        b, t, n, d = obs.shape
-        emb = self.agent_mlp(obs.reshape(b * t * n, d)).reshape(b, t, n, -1)
-
-        weights = active_mask.unsqueeze(-1)
-        denom = weights.sum(dim=2).clamp(min=1.0)
-        pooled = (emb * weights).sum(dim=2) / denom
-        return pooled
-
-
 class SetTokenTeacher(nn.Module):
     """
     Token-based set teacher with masked cross-attention.
@@ -220,7 +195,11 @@ class SetTokenTeacher(nn.Module):
         mask_bool = key_mask.to(dtype=torch.bool, device=scores.device)
         scores = scores.masked_fill(~mask_bool.unsqueeze(2), -1e9)
 
-        # Softmax over all-masked rows is stabilized by re-normalization after masking.
+        # Numerical stabilization for all-masked rows:
+        # - softmax(-1e9, ..., -1e9) is well-defined but produces an arbitrary simplex point.
+        # - multiplying by the boolean mask removes those entries.
+        # - dividing by the masked sum (clamped) keeps rows finite and sums to 1.0 only when
+        #   at least one key was valid; otherwise the row stays all zeros.
         weights = torch.softmax(scores, dim=-1)
         weights = weights * mask_bool.unsqueeze(2).to(dtype=weights.dtype)
         weights = weights / weights.sum(dim=-1, keepdim=True).clamp(min=1e-8)
@@ -277,8 +256,19 @@ class SetValueCritic(nn.Module):
         return values, tokens, ctx_teacher
 
 
-class PIMAC(BaseLearningModel):
-    """MAPPO-style PI-MAC with decentralized actor and token-teacher centralized critic."""
+class PIMACBase(BaseLearningModel):
+    """
+    Shared PI-MAC core.
+
+    This base class contains only algorithmic/common logic:
+    - actor/critic/teacher construction
+    - replay formatting and roster-aware finalization
+    - GAE target computation
+    - PPO/value/distillation updates and diagnostics
+    - train/eval mode and optimizer state
+
+    Interaction styles (AEC vs parallel env APIs) are implemented by subclasses.
+    """
 
     def __init__(
         self,
@@ -300,66 +290,24 @@ class PIMAC(BaseLearningModel):
         entropy_coef: float = 0.01,
         value_coef: float = 0.5,
         max_grad_norm: Optional[float] = 1.0,
-        set_embed_dim: int = 128,
-        set_hidden_sizes: Sequence[int] = (128, 128),
         critic_hidden_sizes: Sequence[int] = (128, 128),
-        share_parameters: bool = True,
         deterministic: bool = False,
-        # New token teacher/distillation knobs.
-        num_tokens: Optional[int] = None,
-        tok_dim: Optional[int] = None,
-        ctx_dim: Optional[int] = None,
-        teacher_hidden_sizes: Optional[Sequence[int]] = None,
-        teacher_drop_prob: Optional[float] = None,
+        num_tokens: int = 4,
+        tok_dim: int = 128,
+        teacher_hidden_sizes: Sequence[int] = (128, 128),
+        teacher_drop_prob: float = 0.1,
         teacher_ema_tau: float = 0.01,
-        distill_weight: Optional[float] = None,
+        distill_weight: float = 0.1,
         ctx_logvar_min: float = -6.0,
         ctx_logvar_max: float = 4.0,
-        # Backward-compatible/legacy knobs accepted for script stability.
-        temp_init: Optional[float] = None,
-        temp_decay: float = 1.0,
-        temp_min: float = 0.0,
-        teacher_lr: Optional[float] = None,
-        teacher_emb_dim: Optional[int] = None,
-        teacher_attn_dim: Optional[int] = None,
-        token_smooth_weight: Optional[float] = None,
-        obs_index_dim: Optional[int] = None,
-        obs_skip: Optional[bool] = None,
-        context_gate_reg: Optional[float] = None,
-        target_update_every: Optional[int] = None,
-        double_q: Optional[bool] = None,
-        tau: Optional[float] = None,
-        q_tot_clip: Optional[float] = None,
-        use_huber_loss: Optional[bool] = None,
-        normalize_by_active: Optional[bool] = None,
-        subteam_samples: Optional[int] = None,
-        subteam_keep_prob: Optional[float] = None,
-        subteam_td_weight: Optional[float] = None,
     ):
         super().__init__()
-        del (
-            teacher_lr,
-            token_smooth_weight,
-            obs_index_dim,
-            obs_skip,
-            context_gate_reg,
-            target_update_every,
-            double_q,
-            tau,
-            q_tot_clip,
-            use_huber_loss,
-            normalize_by_active,
-            subteam_samples,
-            subteam_keep_prob,
-            subteam_td_weight,
-        )
 
         self.device = device
         self.obs_size = int(state_size)
         self.action_space_size = int(action_space_size)
         self.num_agents = int(num_agents)
 
-        self.share_parameters = bool(share_parameters)
         self.batch_size = int(batch_size)
         self.num_epochs = int(num_epochs)
         self.gamma = float(gamma)
@@ -370,62 +318,28 @@ class PIMAC(BaseLearningModel):
         self.value_coef = float(value_coef)
         self.max_grad_norm = float(max_grad_norm) if max_grad_norm is not None else None
 
-        resolved_ctx_dim = tok_dim
-        if resolved_ctx_dim is None:
-            resolved_ctx_dim = ctx_dim
-        if resolved_ctx_dim is None:
-            resolved_ctx_dim = teacher_attn_dim
-        if resolved_ctx_dim is None:
-            resolved_ctx_dim = teacher_emb_dim
-        if resolved_ctx_dim is None:
-            resolved_ctx_dim = set_embed_dim
-
-        self.ctx_dim = int(resolved_ctx_dim)
-        self.num_tokens = int(4 if num_tokens is None else num_tokens)
-        self.teacher_hidden_sizes = tuple(set_hidden_sizes if teacher_hidden_sizes is None else teacher_hidden_sizes)
-        self.teacher_drop_prob = float(0.1 if teacher_drop_prob is None else teacher_drop_prob)
+        self.ctx_dim = int(tok_dim)
+        self.num_tokens = int(num_tokens)
+        self.teacher_hidden_sizes = tuple(teacher_hidden_sizes)
+        self.teacher_drop_prob = float(teacher_drop_prob)
         self.teacher_drop_prob = max(0.0, min(1.0, self.teacher_drop_prob))
         self.teacher_ema_tau = float(max(0.0, min(1.0, teacher_ema_tau)))
-        self.distill_weight = float(0.1 if distill_weight is None else distill_weight)
+        self.distill_weight = float(distill_weight)
         self.ctx_logvar_min = float(ctx_logvar_min)
         self.ctx_logvar_max = float(ctx_logvar_max)
 
-        # Compatibility with old scripts that used Boltzmann temperature.
-        self.temperature = 1.0 if temp_init is None else float(temp_init)
-        self.temp_decay = float(temp_decay)
-        self.temp_min = float(temp_min)
-
         self.deterministic = bool(deterministic)
 
-        if self.share_parameters:
-            self.actor_net = PIMACActorRNN(
-                obs_dim=self.obs_size,
-                action_dim=self.action_space_size,
-                num_hidden=int(num_hidden),
-                widths=tuple(widths),
-                rnn_hidden_dim=int(rnn_hidden_dim),
-                ctx_dim=self.ctx_dim,
-                ctx_logvar_min=self.ctx_logvar_min,
-                ctx_logvar_max=self.ctx_logvar_max,
-            ).to(self.device)
-            self.actor_nets = None
-        else:
-            self.actor_net = None
-            self.actor_nets = nn.ModuleList(
-                [
-                    PIMACActorRNN(
-                        obs_dim=self.obs_size,
-                        action_dim=self.action_space_size,
-                        num_hidden=int(num_hidden),
-                        widths=tuple(widths),
-                        rnn_hidden_dim=int(rnn_hidden_dim),
-                        ctx_dim=self.ctx_dim,
-                        ctx_logvar_min=self.ctx_logvar_min,
-                        ctx_logvar_max=self.ctx_logvar_max,
-                    ).to(self.device)
-                    for _ in range(self.num_agents)
-                ]
-            )
+        self.actor_net = PIMACActorRNN(
+            obs_dim=self.obs_size,
+            action_dim=self.action_space_size,
+            num_hidden=int(num_hidden),
+            widths=tuple(widths),
+            rnn_hidden_dim=int(rnn_hidden_dim),
+            ctx_dim=self.ctx_dim,
+            ctx_logvar_min=self.ctx_logvar_min,
+            ctx_logvar_max=self.ctx_logvar_max,
+        ).to(self.device)
 
         self.critic = SetValueCritic(
             obs_dim=self.obs_size,
@@ -457,20 +371,13 @@ class PIMAC(BaseLearningModel):
         # Per-agent hidden state used only during decentralized inference.
         self._inference_hidden: dict[object, torch.Tensor] = {}
 
-        # Legacy aliases kept for broader script compatibility.
-        self.agent_net = self.actor_net if self.share_parameters else None
-        self.agent_nets = self.actor_nets
-        self.target_agent_net = self.actor_net if self.share_parameters else None
-        self.target_agent_nets = self.actor_nets
-        self.teacher = self.critic.teacher
-
     def _actor_parameters(self):
-        if self.share_parameters:
-            return self.actor_net.parameters()
-        return self.actor_nets.parameters()
+        return self.actor_net.parameters()
 
     def reset_episode(self) -> None:
-        """Clear inference hidden state between environment episodes."""
+        """
+        Clear recurrent inference state for a new environment episode.
+        """
         self._inference_hidden = {}
         self._aec_cycle = None
 
@@ -483,181 +390,31 @@ class PIMAC(BaseLearningModel):
     def _set_h(self, agent_key: object, h: torch.Tensor) -> None:
         self._inference_hidden[agent_key] = h.detach()
 
-    def _random_action(self, action_mask: Optional[np.ndarray]) -> int:
-        if action_mask is None:
-            return int(np.random.randint(self.action_space_size))
-        valid_actions = np.flatnonzero(np.asarray(action_mask, dtype=np.int8))
-        if valid_actions.size == 0:
-            return int(np.random.randint(self.action_space_size))
-        return int(np.random.choice(valid_actions))
-
-    @staticmethod
-    def _apply_action_masks(logits: torch.Tensor, action_masks: torch.Tensor) -> torch.Tensor:
-        """Mask invalid actions with a large negative logit while handling all-zero masks safely."""
-        mask = action_masks.to(dtype=torch.bool, device=logits.device)
-        if mask.shape != logits.shape:
-            return logits
-
-        has_any_valid = mask.any(dim=-1, keepdim=True)
-        safe_mask = torch.where(has_any_valid, mask, torch.ones_like(mask))
-        return logits.masked_fill(~safe_mask, -1e9)
-
-    def act(
+    def _act_single(
         self,
         state: np.ndarray,
-        action_mask: Optional[np.ndarray] = None,
-        agent_index: Optional[object] = None,
+        actor_key: object,
     ) -> int:
         """
-        Select one action for one agent from local observation only.
+        Shared decentralized action path for one agent stream.
 
-        This is the decentralized execution path.
+        Args:
+            state: local observation.
+            actor_key: recurrent-state key.
         """
-        if agent_index is None:
-            agent_index = 0
-
         obs_t = torch.as_tensor(state, dtype=torch.float32, device=self.device).view(1, 1, -1)
+        hidden_dim = self.actor_net.rnn.hidden_size
+        h0 = self._get_h0(actor_key, hidden_dim)
+        logits_seq, hn = self.actor_net(obs_t, h0)
 
-        if self.share_parameters:
-            hidden_dim = self.actor_net.rnn.hidden_size
-            h0 = self._get_h0(agent_index, hidden_dim)
-            logits_seq, hn = self.actor_net(obs_t, h0)
-        else:
-            if not isinstance(agent_index, int):
-                raise ValueError("agent_index must be an int when share_parameters=False.")
-            if agent_index < 0 or agent_index >= self.num_agents:
-                raise ValueError(f"agent_index {agent_index} is out of range for {self.num_agents} agents.")
-            net = self.actor_nets[agent_index]
-            hidden_dim = net.rnn.hidden_size
-            h0 = self._get_h0(agent_index, hidden_dim)
-            logits_seq, hn = net(obs_t, h0)
-
-        self._set_h(agent_index, hn)
+        self._set_h(actor_key, hn)
         logits = logits_seq.squeeze(0).squeeze(0)
 
-        if action_mask is not None:
-            mask = torch.as_tensor(action_mask, dtype=torch.bool, device=logits.device)
-            if mask.shape[0] == logits.shape[0] and mask.any():
-                logits = logits.masked_fill(~mask, -1e9)
-            elif not mask.any():
-                return self._random_action(action_mask)
-
-        if self.deterministic or self.temperature <= 0.0:
+        if self.deterministic:
             return int(torch.argmax(logits).item())
 
-        scaled_logits = logits / max(self.temperature, 1e-8)
-        dist = torch.distributions.Categorical(logits=scaled_logits)
+        dist = torch.distributions.Categorical(logits=logits)
         return int(dist.sample().item())
-
-    # Parallel usage example:
-    # actions = pimac.act_parallel(obs_dict, action_mask_dict)
-    # pimac.store_parallel_step(obs_dict, action_dict, reward_dict, next_obs_dict, done_dict)
-    def act_parallel(self, obs_dict: dict, action_mask_dict: Optional[dict] = None) -> dict:
-        """Parallel API helper: obs_dict -> action_dict."""
-        actions = {}
-        for agent_id in _sorted_agent_ids(obs_dict.keys()):
-            action_mask = None if action_mask_dict is None else action_mask_dict.get(agent_id)
-            actions[agent_id] = self.act(obs_dict[agent_id], action_mask=action_mask, agent_index=agent_id)
-        return actions
-
-    def store_parallel_step(
-        self,
-        obs_dict: dict,
-        action_dict: dict,
-        reward_dict: dict,
-        next_obs_dict: dict,
-        done_dict: dict,
-        action_mask_dict: Optional[dict] = None,
-        next_action_mask_dict: Optional[dict] = None,
-        global_state: Optional[np.ndarray] = None,
-        next_global_state: Optional[np.ndarray] = None,
-    ) -> None:
-        """Parallel API helper: store one joint transition per environment step."""
-        done = bool(done_dict.get("__all__", False)) if isinstance(done_dict, dict) else bool(done_dict)
-        self.store_transition(
-            observations=obs_dict,
-            actions=action_dict,
-            rewards=reward_dict,
-            active_mask=None,
-            global_state=global_state,
-            next_observations=next_obs_dict,
-            next_active_mask=None,
-            next_global_state=next_global_state,
-            done=done,
-            action_masks=action_mask_dict,
-            next_action_masks=next_action_mask_dict,
-        )
-
-    # AEC usage example:
-    # pimac.aec_begin_cycle(env.possible_agents)
-    # for agent_id in env.agent_iter(): pimac.aec_record(...)
-    # pimac.aec_end_cycle(done_all=done)
-    def aec_begin_cycle(self, agent_ids_current: Sequence[object]) -> None:
-        """AEC helper: begin a new joint step cycle before per-agent turns."""
-        self._aec_cycle = {
-            "agent_ids": list(agent_ids_current),
-            "obs": {},
-            "actions": {},
-            "rewards": {},
-            "next_obs": {},
-            "dones": {},
-            "action_masks": {},
-            "next_action_masks": {},
-        }
-
-    def aec_record(
-        self,
-        agent_id: object,
-        obs: np.ndarray,
-        action: Optional[int],
-        reward: float,
-        next_obs: Optional[np.ndarray],
-        done: bool,
-        action_mask: Optional[np.ndarray] = None,
-        next_action_mask: Optional[np.ndarray] = None,
-    ) -> None:
-        """AEC helper: record per-agent data within the current joint cycle."""
-        if self._aec_cycle is None:
-            raise RuntimeError("Call aec_begin_cycle before aec_record.")
-        self._aec_cycle["obs"][agent_id] = obs
-        self._aec_cycle["actions"][agent_id] = 0 if action is None else int(action)
-        self._aec_cycle["rewards"][agent_id] = float(reward)
-        if next_obs is None:
-            next_obs = np.zeros_like(np.asarray(obs, dtype=np.float32))
-        self._aec_cycle["next_obs"][agent_id] = next_obs
-        self._aec_cycle["dones"][agent_id] = bool(done)
-        if action_mask is not None:
-            self._aec_cycle["action_masks"][agent_id] = action_mask
-        if next_action_mask is not None:
-            self._aec_cycle["next_action_masks"][agent_id] = next_action_mask
-
-    def aec_end_cycle(
-        self,
-        global_state: Optional[np.ndarray] = None,
-        next_global_state: Optional[np.ndarray] = None,
-        done_all: bool = False,
-    ) -> None:
-        """AEC helper: finalize and store a joint transition for the cycle."""
-        if self._aec_cycle is None:
-            raise RuntimeError("Call aec_begin_cycle before aec_end_cycle.")
-        done = bool(done_all) or all(self._aec_cycle["dones"].values())
-        action_masks = self._aec_cycle["action_masks"] or None
-        next_action_masks = self._aec_cycle["next_action_masks"] or None
-        self.store_transition(
-            observations=self._aec_cycle["obs"],
-            actions=self._aec_cycle["actions"],
-            rewards=self._aec_cycle["rewards"],
-            active_mask=None,
-            global_state=global_state,
-            next_observations=self._aec_cycle["next_obs"],
-            next_active_mask=None,
-            next_global_state=next_global_state,
-            done=done,
-            action_masks=action_masks,
-            next_action_masks=next_action_masks,
-            agent_ids=self._aec_cycle["agent_ids"],
-        )
-        self._aec_cycle = None
 
     @staticmethod
     def _ensure_state(state: Optional[np.ndarray]) -> np.ndarray:
@@ -676,8 +433,6 @@ class PIMAC(BaseLearningModel):
         next_active_mask,
         next_global_state,
         done,
-        action_masks,
-        next_action_masks,
         agent_ids: Optional[Sequence[object]],
     ) -> dict:
         obs_is_dict = isinstance(observations, dict)
@@ -718,9 +473,14 @@ class PIMAC(BaseLearningModel):
         next_obs_is_dict = isinstance(next_observations, dict)
         if next_obs_is_dict:
             next_agent_ids = _sorted_agent_ids(next_observations.keys())
-            next_obs_arr = np.stack(
-                [np.asarray(next_observations[aid], dtype=np.float32) for aid in next_agent_ids], axis=0
-            )
+            if next_agent_ids:
+                next_obs_arr = np.stack(
+                    [np.asarray(next_observations[aid], dtype=np.float32) for aid in next_agent_ids], axis=0
+                )
+            else:
+                # Terminal parallel steps may provide an empty next-observation dict.
+                # Keep a valid 2D tensor shape to preserve downstream roster/padding logic.
+                next_obs_arr = np.zeros((0, obs_arr.shape[-1]), dtype=np.float32)
         else:
             next_obs_arr = np.asarray(next_observations, dtype=np.float32)
             if next_obs_arr.ndim == 1:
@@ -738,42 +498,6 @@ class PIMAC(BaseLearningModel):
             if next_active_arr.ndim == 0:
                 next_active_arr = next_active_arr.reshape(1)
 
-        if action_masks is None:
-            action_masks_arr = None
-        elif isinstance(action_masks, dict):
-            action_masks_arr = np.stack(
-                [
-                    np.asarray(
-                        action_masks.get(aid, np.ones(self.action_space_size, dtype=np.int8)),
-                        dtype=np.int8,
-                    )
-                    for aid in agent_ids
-                ],
-                axis=0,
-            )
-        else:
-            action_masks_arr = np.asarray(action_masks, dtype=np.int8)
-            if action_masks_arr.ndim == 1:
-                action_masks_arr = action_masks_arr.reshape(1, -1)
-
-        if next_action_masks is None:
-            next_action_masks_arr = None
-        elif isinstance(next_action_masks, dict):
-            next_action_masks_arr = np.stack(
-                [
-                    np.asarray(
-                        next_action_masks.get(aid, np.ones(self.action_space_size, dtype=np.int8)),
-                        dtype=np.int8,
-                    )
-                    for aid in next_agent_ids
-                ],
-                axis=0,
-            )
-        else:
-            next_action_masks_arr = np.asarray(next_action_masks, dtype=np.int8)
-            if next_action_masks_arr.ndim == 1:
-                next_action_masks_arr = next_action_masks_arr.reshape(1, -1)
-
         return {
             "agent_ids": list(agent_ids),
             "obs": obs_arr,
@@ -785,8 +509,6 @@ class PIMAC(BaseLearningModel):
             "next_active_mask": next_active_arr,
             "next_state": self._ensure_state(next_global_state),
             "done": bool(done),
-            "action_masks": action_masks_arr,
-            "next_action_masks": next_action_masks_arr,
             "next_agent_ids": list(next_agent_ids),
         }
 
@@ -801,8 +523,6 @@ class PIMAC(BaseLearningModel):
         next_active_mask,
         next_global_state: Optional[np.ndarray],
         done: bool,
-        action_masks: Optional[np.ndarray] = None,
-        next_action_masks: Optional[np.ndarray] = None,
         agent_ids: Optional[Sequence[object]] = None,
     ) -> None:
         self._episode_steps.append(
@@ -816,8 +536,6 @@ class PIMAC(BaseLearningModel):
                 next_active_mask,
                 next_global_state,
                 done,
-                action_masks,
-                next_action_masks,
                 agent_ids,
             )
         )
@@ -827,77 +545,26 @@ class PIMAC(BaseLearningModel):
             self.memory.append(episode)
             self._episode_steps = []
 
-    def store_episode(
-        self,
-        observations: np.ndarray,
-        actions: np.ndarray,
-        rewards: np.ndarray,
-        active_mask: np.ndarray,
-        global_state: Optional[np.ndarray] = None,
-    ) -> None:
-        """Convenience API for one-shot OpenURB daily transitions."""
-        zeros_obs = np.zeros_like(np.asarray(observations, dtype=np.float32))
-        state = self._ensure_state(global_state)
-        zeros_state = np.zeros_like(state)
-        self.store_transition(
-            observations=observations,
-            actions=actions,
-            rewards=rewards,
-            active_mask=active_mask,
-            global_state=state,
-            next_observations=zeros_obs,
-            next_active_mask=active_mask,
-            next_global_state=zeros_state,
-            done=True,
-        )
-
     def _actor_forward(self, obs: torch.Tensor, return_aux: bool = False):
         """obs: [B, T, N, obs_dim] -> logits: [B, T, N, A], aux tensors if requested."""
         b, t, n, d = obs.shape
 
-        if self.share_parameters:
-            obs_bn = obs.permute(0, 2, 1, 3).reshape(b * n, t, d)
-            if return_aux:
-                logits_bn, _, aux_bn = self.actor_net(obs_bn, None, return_aux=True)
-                logits = logits_bn.reshape(b, n, t, -1).permute(0, 2, 1, 3)
-                aux = {
-                    "ctx_mu": aux_bn["ctx_mu"].reshape(b, n, t, -1).permute(0, 2, 1, 3),
-                    "ctx_logvar": aux_bn["ctx_logvar"].reshape(b, n, t, -1).permute(0, 2, 1, 3),
-                    "gate": aux_bn["gate"].reshape(b, n, t, -1).permute(0, 2, 1, 3),
-                }
-                return logits, aux
-
-            logits_bn, _ = self.actor_net(obs_bn, None)
+        # Shared-actor execution: flatten [B, N] into one stream axis so the actor
+        # processes each agent trajectory independently with the same parameters.
+        obs_bn = obs.permute(0, 2, 1, 3).reshape(b * n, t, d)
+        if return_aux:
+            logits_bn, _, aux_bn = self.actor_net(obs_bn, None, return_aux=True)
             logits = logits_bn.reshape(b, n, t, -1).permute(0, 2, 1, 3)
-            return logits, None
+            aux = {
+                "ctx_mu": aux_bn["ctx_mu"].reshape(b, n, t, -1).permute(0, 2, 1, 3),
+                "ctx_logvar": aux_bn["ctx_logvar"].reshape(b, n, t, -1).permute(0, 2, 1, 3),
+                "gate": aux_bn["gate"].reshape(b, n, t, -1).permute(0, 2, 1, 3),
+            }
+            return logits, aux
 
-        if n > len(self.actor_nets):
-            raise ValueError("Number of active roster slots exceeds available non-shared actor networks.")
-
-        logits_per_agent = []
-        ctx_mu_per_agent = []
-        ctx_logvar_per_agent = []
-        gate_per_agent = []
-        for idx in range(n):
-            if return_aux:
-                logits_i, _, aux_i = self.actor_nets[idx](obs[:, :, idx, :], None, return_aux=True)
-                ctx_mu_per_agent.append(aux_i["ctx_mu"].unsqueeze(2))
-                ctx_logvar_per_agent.append(aux_i["ctx_logvar"].unsqueeze(2))
-                gate_per_agent.append(aux_i["gate"].unsqueeze(2))
-            else:
-                logits_i, _ = self.actor_nets[idx](obs[:, :, idx, :], None)
-            logits_per_agent.append(logits_i.unsqueeze(2))
-
-        logits = torch.cat(logits_per_agent, dim=2)
-        if not return_aux:
-            return logits, None
-
-        aux = {
-            "ctx_mu": torch.cat(ctx_mu_per_agent, dim=2),
-            "ctx_logvar": torch.cat(ctx_logvar_per_agent, dim=2),
-            "gate": torch.cat(gate_per_agent, dim=2),
-        }
-        return logits, aux
+        logits_bn, _ = self.actor_net(obs_bn, None)
+        logits = logits_bn.reshape(b, n, t, -1).permute(0, 2, 1, 3)
+        return logits, None
 
     @staticmethod
     def _team_rewards(rewards: np.ndarray, active_mask: np.ndarray) -> np.ndarray:
@@ -913,7 +580,6 @@ class PIMAC(BaseLearningModel):
         obs: np.ndarray,
         actions: np.ndarray,
         active_mask: np.ndarray,
-        action_masks: Optional[np.ndarray],
     ) -> np.ndarray:
         obs_t = torch.as_tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
         actions_t = torch.as_tensor(actions, dtype=torch.int64, device=self.device).unsqueeze(0)
@@ -921,9 +587,6 @@ class PIMAC(BaseLearningModel):
 
         with torch.no_grad():
             logits, _ = self._actor_forward(obs_t, return_aux=False)
-            if action_masks is not None:
-                masks_t = torch.as_tensor(action_masks, dtype=torch.int8, device=self.device).unsqueeze(0)
-                logits = self._apply_action_masks(logits, masks_t)
             dist = torch.distributions.Categorical(logits=logits)
             old_log_probs = dist.log_prob(actions_t) * active_t
 
@@ -943,6 +606,12 @@ class PIMAC(BaseLearningModel):
         next_values: np.ndarray,
         dones: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Generalized Advantage Estimation on team rewards.
+
+        The recursion is performed backward in time and respects episode terminals via
+        `(1 - done_t)` in both TD residual and advantage carry-over terms.
+        """
         advantages = np.zeros_like(team_rewards, dtype=np.float32)
         last_adv = 0.0
 
@@ -956,6 +625,15 @@ class PIMAC(BaseLearningModel):
         return advantages.astype(np.float32, copy=False), returns.astype(np.float32, copy=False)
 
     def _finalize_episode(self, steps: list[dict]) -> dict:
+        """
+        Convert variable-roster raw steps into one roster-aligned episode record.
+
+        Roster flow:
+        1. Build the union of agent ids observed in current and next observations.
+        2. Allocate dense `[T, N, ...]` arrays using that roster as the slot map.
+        3. Fill active entries and leave absent agents at zero.
+        4. Compute on-policy targets (`old_log_probs`, value estimates, GAE, returns).
+        """
         roster = []
         roster_index = {}
 
@@ -979,18 +657,11 @@ class PIMAC(BaseLearningModel):
         active_mask = np.zeros((t, n), dtype=np.float32)
         next_obs = np.zeros((t, n, obs_dim), dtype=np.float32)
         next_active_mask = np.zeros((t, n), dtype=np.float32)
+        # `state` and `next_state` are retained for API compatibility with callers that
+        # persist global state snapshots, even though PI-MAC PPO losses do not consume them.
         state = np.stack([s["state"] for s in steps], axis=0)
         next_state = np.stack([s["next_state"] for s in steps], axis=0)
         done = np.asarray([s["done"] for s in steps], dtype=np.float32)
-
-        action_masks = None
-        next_action_masks = None
-        if all(s.get("action_masks") is not None for s in steps):
-            action_dim = steps[0]["action_masks"].shape[-1]
-            action_masks = np.zeros((t, n, action_dim), dtype=np.int8)
-        if all(s.get("next_action_masks") is not None for s in steps):
-            action_dim = steps[0]["next_action_masks"].shape[-1]
-            next_action_masks = np.zeros((t, n, action_dim), dtype=np.int8)
 
         for ti, step in enumerate(steps):
             for idx, aid in enumerate(step["agent_ids"]):
@@ -999,17 +670,15 @@ class PIMAC(BaseLearningModel):
                 actions[ti, slot] = step["actions"][idx]
                 rewards[ti, slot] = step["rewards"][idx]
                 active_mask[ti, slot] = step["active_mask"][idx]
-                if action_masks is not None:
-                    action_masks[ti, slot] = step["action_masks"][idx]
 
             for idx, aid in enumerate(step["next_agent_ids"]):
                 slot = roster_index[aid]
                 next_obs[ti, slot] = step["next_obs"][idx]
                 next_active_mask[ti, slot] = step["next_active_mask"][idx]
-                if next_action_masks is not None:
-                    next_action_masks[ti, slot] = step["next_action_masks"][idx]
 
-        old_log_probs = self._compute_old_log_probs(obs, actions, active_mask, action_masks)
+        # Behavior-policy statistics are frozen at finalization time; PPO reuses these as
+        # `old_log_probs` and bootstrap values during subsequent updates.
+        old_log_probs = self._compute_old_log_probs(obs, actions, active_mask)
         values = self._compute_values(obs, active_mask)
         next_values = self._compute_values(next_obs, next_active_mask)
         team_rewards = self._team_rewards(rewards, active_mask)
@@ -1025,8 +694,6 @@ class PIMAC(BaseLearningModel):
             "next_active_mask": next_active_mask,
             "next_state": next_state,
             "done": done,
-            "action_masks": action_masks,
-            "next_action_masks": next_action_masks,
             "old_log_probs": old_log_probs,
             "advantages": advantages,
             "returns": returns,
@@ -1066,11 +733,18 @@ class PIMAC(BaseLearningModel):
         return dropped
 
     def _teacher_for_targets(self) -> SetTokenTeacher:
+        """Select distillation target source (EMA target teacher or online teacher)."""
         if self.teacher_ema_tau > 0.0:
             return self.target_teacher
         return self.critic.teacher
 
     def _update_target_teacher(self) -> None:
+        """
+        Exponential moving average (EMA) update of target teacher parameters.
+
+        Buffers are updated with EMA for floating tensors and copied exactly for non-floating
+        buffers so module state stays consistent.
+        """
         if self.teacher_ema_tau <= 0.0:
             return
 
@@ -1087,126 +761,346 @@ class PIMAC(BaseLearningModel):
 
     @staticmethod
     def _masked_mean(values: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """Mean over valid entries only; avoids NaNs when masks are fully zero."""
         return (values * mask).sum() / mask.sum().clamp(min=1.0)
 
+    @staticmethod
+    def _pad_time(x: np.ndarray, max_t: int, pad_value: float = 0.0) -> np.ndarray:
+        """Pad along the time axis only: [T, ...] -> [max_t, ...]."""
+        t = x.shape[0]
+        if t == max_t:
+            return x
+        pad_shape = (max_t - t,) + x.shape[1:]
+        pad = np.full(pad_shape, pad_value, dtype=x.dtype)
+        return np.concatenate([x, pad], axis=0)
+
+    @staticmethod
+    def _pad_time_agents(x: np.ndarray, max_t: int, max_n: int, pad_value: float = 0.0) -> np.ndarray:
+        """
+        Pad `[T, N, ...]` tensors to a shared minibatch grid.
+
+        This is the key roster/padding bridge from variable-size episodes to one dense
+        tensor batch. Padding is always zero so masks can cleanly remove fake entries.
+        """
+        t, n = x.shape[0], x.shape[1]
+        if t == max_t and n == max_n:
+            return x
+        pad_width = [(0, max_t - t), (0, max_n - n)] + [(0, 0)] * (x.ndim - 2)
+        return np.pad(x, pad_width, mode="constant", constant_values=pad_value)
+
+    def _build_minibatch_tensors(self, batch: list[dict]) -> dict[str, torch.Tensor | None]:
+        """
+        Convert sampled finalized episodes into padded torch tensors.
+
+        Returned masks have distinct roles:
+        - `time_mask`: real timesteps vs right-padding.
+        - `combined_mask`: active agents at real timesteps (policy/distillation support).
+        - `valid_time`: real timesteps with at least one active agent (value support).
+        """
+        max_t = max(int(ep["T"]) for ep in batch)
+        max_n = max(int(ep["N"]) for ep in batch)
+
+        obs = torch.as_tensor(
+            np.stack([self._pad_time_agents(ep["obs"], max_t, max_n) for ep in batch]),
+            device=self.device,
+            dtype=torch.float32,
+        )
+        actions = torch.as_tensor(
+            np.stack([self._pad_time_agents(ep["actions"], max_t, max_n, pad_value=0) for ep in batch]),
+            device=self.device,
+            dtype=torch.int64,
+        )
+        active_mask = torch.as_tensor(
+            np.stack([self._pad_time_agents(ep["active_mask"], max_t, max_n, pad_value=0.0) for ep in batch]),
+            device=self.device,
+            dtype=torch.float32,
+        )
+        old_log_probs = torch.as_tensor(
+            np.stack([self._pad_time_agents(ep["old_log_probs"], max_t, max_n, pad_value=0.0) for ep in batch]),
+            device=self.device,
+            dtype=torch.float32,
+        )
+        advantages = torch.as_tensor(
+            np.stack([self._pad_time(ep["advantages"], max_t, pad_value=0.0) for ep in batch]),
+            device=self.device,
+            dtype=torch.float32,
+        )
+        returns = torch.as_tensor(
+            np.stack([self._pad_time(ep["returns"], max_t, pad_value=0.0) for ep in batch]),
+            device=self.device,
+            dtype=torch.float32,
+        )
+
+        lengths = torch.as_tensor([int(ep["T"]) for ep in batch], device=self.device, dtype=torch.int64)
+        time_mask = (torch.arange(max_t, device=self.device).unsqueeze(0) < lengths.unsqueeze(1)).to(
+            dtype=torch.float32
+        )
+        combined_mask = active_mask * time_mask.unsqueeze(-1)
+        valid_time = time_mask * (active_mask.sum(dim=2) > 0.0).to(dtype=torch.float32)
+
+        return {
+            "obs": obs,
+            "actions": actions,
+            "active_mask": active_mask,
+            "old_log_probs": old_log_probs,
+            "advantages": advantages,
+            "returns": returns,
+            "time_mask": time_mask,
+            "combined_mask": combined_mask,
+            "valid_time": valid_time,
+        }
+
+    def _normalize_advantages(self, advantages: torch.Tensor, valid_time: torch.Tensor) -> torch.Tensor:
+        """
+        Normalize team advantages over valid timesteps only.
+
+        We normalize on `[B, T]` values before broadcasting to agents, preserving the
+        original team-level PPO signal semantics.
+        """
+        if not self.normalize_advantage:
+            return advantages
+
+        flat_adv = advantages[valid_time.bool()]
+        if flat_adv.numel() == 0:
+            return advantages
+
+        adv_mean = flat_adv.mean()
+        adv_std = flat_adv.std(unbiased=False)
+        return (advantages - adv_mean) / (adv_std + 1e-8)
+
+    def _compute_policy_terms(
+        self,
+        obs: torch.Tensor,
+        actions: torch.Tensor,
+        old_log_probs: torch.Tensor,
+        advantages: torch.Tensor,
+        combined_mask: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """Compute PPO policy and entropy terms on active decisions only."""
+        logits, actor_aux = self._actor_forward(obs, return_aux=True)
+
+        dist = torch.distributions.Categorical(logits=logits)
+        new_log_probs = dist.log_prob(actions)
+        entropy = dist.entropy()
+
+        adv_expanded = advantages.unsqueeze(-1).expand_as(new_log_probs)
+        ratio = torch.exp(new_log_probs - old_log_probs)
+        surr1 = ratio * adv_expanded
+        surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * adv_expanded
+
+        decision_denom = combined_mask.sum().clamp(min=1.0)
+        policy_loss = -(torch.min(surr1, surr2) * combined_mask).sum() / decision_denom
+        entropy_bonus = (entropy * combined_mask).sum() / decision_denom
+
+        return {
+            "actor_aux": actor_aux,
+            "new_log_probs": new_log_probs,
+            "ratio": ratio,
+            "policy_loss": policy_loss,
+            "entropy_bonus": entropy_bonus,
+            "decision_denom": decision_denom,
+        }
+
+    def _compute_value_and_distillation_terms(
+        self,
+        obs: torch.Tensor,
+        active_mask: torch.Tensor,
+        returns: torch.Tensor,
+        valid_time: torch.Tensor,
+        combined_mask: torch.Tensor,
+        decision_denom: torch.Tensor,
+        actor_aux: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor | SetTokenTeacher]:
+        """
+        Compute critic/value and heteroscedastic distillation losses.
+
+        Distillation uses full active masks for teacher targets; agent-drop is used only
+        on critic input as robustness augmentation.
+        """
+        critic_mask = self._sample_teacher_mask(active_mask, self.teacher_drop_prob)
+        values, _, _ = self.critic(obs, critic_mask, return_details=True)
+        value_loss = (((returns - values) ** 2) * valid_time).sum() / valid_time.sum().clamp(min=1.0)
+
+        teacher_for_targets = self._teacher_for_targets()
+        with torch.no_grad():
+            _, ctx_tgt = teacher_for_targets(obs, active_mask)
+
+        ctx_mu = actor_aux["ctx_mu"]
+        ctx_logvar = actor_aux["ctx_logvar"]
+        gate = actor_aux["gate"].squeeze(-1)
+
+        # Heteroscedastic Gaussian NLL:
+        #   0.5 * exp(-logvar) * (mu - target)^2 + 0.5 * logvar
+        # summed over context channels and averaged over valid agent-decisions.
+        distill_nll = 0.5 * torch.exp(-ctx_logvar) * ((ctx_mu - ctx_tgt) ** 2) + 0.5 * ctx_logvar
+        distill_per_agent = distill_nll.sum(dim=-1)
+        distill_loss = (distill_per_agent * combined_mask).sum() / decision_denom
+
+        distill_mse_per_agent = ((ctx_mu - ctx_tgt) ** 2).mean(dim=-1)
+        distill_mse = (distill_mse_per_agent * combined_mask).sum() / decision_denom
+
+        return {
+            "values": values,
+            "value_loss": value_loss,
+            "distill_loss": distill_loss,
+            "distill_mse": distill_mse,
+            "ctx_logvar": ctx_logvar,
+            "gate": gate,
+            "teacher_for_targets": teacher_for_targets,
+        }
+
+    def _compute_update_diagnostics(
+        self,
+        obs: torch.Tensor,
+        active_mask: torch.Tensor,
+        time_mask: torch.Tensor,
+        combined_mask: torch.Tensor,
+        valid_time: torch.Tensor,
+        returns: torch.Tensor,
+        values: torch.Tensor,
+        old_log_probs: torch.Tensor,
+        new_log_probs: torch.Tensor,
+        ratio: torch.Tensor,
+        ctx_logvar: torch.Tensor,
+        gate: torch.Tensor,
+        teacher_for_targets: SetTokenTeacher,
+        decision_denom: torch.Tensor,
+    ) -> dict[str, torch.Tensor | float]:
+        """
+        Compute the same diagnostics used by existing training scripts.
+
+        Includes:
+        - PPO stability signals (KL/clip fraction/explained variance)
+        - teacher/token interpretability metrics
+        - context consistency diagnostic under agent-drop masking
+        - uncertainty/gate statistics
+        """
+        with torch.no_grad():
+            log_ratio = new_log_probs - old_log_probs
+            approx_kl = ((-log_ratio) * combined_mask).sum() / decision_denom
+            clip_frac = (((ratio - 1.0).abs() > self.clip_eps).to(dtype=torch.float32) * combined_mask).sum()
+            clip_frac = clip_frac / decision_denom
+
+            vt = valid_time.bool()
+            if vt.any():
+                returns_valid = returns[vt]
+                values_valid = values.detach()[vt]
+                var_returns = torch.var(returns_valid, unbiased=False)
+                if float(var_returns.item()) > 1e-8:
+                    explained_variance = 1.0 - (
+                        torch.var(returns_valid - values_valid, unbiased=False) / (var_returns + 1e-8)
+                    )
+                else:
+                    explained_variance = torch.tensor(0.0, device=self.device)
+            else:
+                explained_variance = torch.tensor(0.0, device=self.device)
+
+            tokens_full, ctx_full_online = self.critic.teacher(obs, active_mask)
+            token_norm = torch.linalg.norm(tokens_full, dim=-1)
+            token_mask = valid_time.unsqueeze(-1).expand_as(token_norm)
+            token_norm_mean = self._masked_mean(token_norm, token_mask)
+
+            teacher_ctx_norm = torch.linalg.norm(ctx_full_online, dim=-1)
+            teacher_ctx_norm_mean = self._masked_mean(teacher_ctx_norm, combined_mask)
+
+            # Consistency metric: compare teacher context under full vs dropped masks.
+            # This is diagnostic-only (no gradient path, no extra loss term).
+            diag_drop_mask = self._sample_teacher_mask(active_mask, self.teacher_drop_prob)
+            _, ctx_full_diag = teacher_for_targets(obs, active_mask)
+            _, ctx_drop_diag = teacher_for_targets(obs, diag_drop_mask)
+            diag_mask = diag_drop_mask * time_mask.unsqueeze(-1)
+            ctx_l2 = torch.sqrt(((ctx_full_diag - ctx_drop_diag) ** 2).sum(dim=-1) + 1e-12)
+            ctx_consistency_l2 = self._masked_mean(ctx_l2, diag_mask)
+
+            logvar_mean_per_agent = ctx_logvar.mean(dim=-1)
+            selected_logvar = logvar_mean_per_agent[combined_mask.bool()]
+            if selected_logvar.numel() > 0:
+                ctx_logvar_mean = selected_logvar.mean()
+                ctx_logvar_std = selected_logvar.std(unbiased=False)
+            else:
+                ctx_logvar_mean = torch.tensor(0.0, device=self.device)
+                ctx_logvar_std = torch.tensor(0.0, device=self.device)
+
+            selected_gate = gate[combined_mask.bool()]
+            if selected_gate.numel() > 0:
+                gate_mean = selected_gate.mean()
+                gate_std = selected_gate.std(unbiased=False)
+            else:
+                gate_mean = torch.tensor(0.0, device=self.device)
+                gate_std = torch.tensor(0.0, device=self.device)
+
+            active_decisions = float(combined_mask.sum().item())
+            active_agents_per_step = active_mask.sum(dim=-1)
+            active_agents_mean = self._masked_mean(active_agents_per_step, valid_time)
+
+        return {
+            "approx_kl": approx_kl,
+            "clip_frac": clip_frac,
+            "explained_variance": explained_variance,
+            "token_norm_mean": token_norm_mean,
+            "teacher_ctx_norm_mean": teacher_ctx_norm_mean,
+            "ctx_consistency_l2": ctx_consistency_l2,
+            "ctx_logvar_mean": ctx_logvar_mean,
+            "ctx_logvar_std": ctx_logvar_std,
+            "gate_mean": gate_mean,
+            "gate_std": gate_std,
+            "active_decisions": active_decisions,
+            "active_agents_mean": active_agents_mean,
+        }
+
     def learn(self) -> None:
-        """Run PPO updates + distillation and clear on-policy memory after a successful update."""
+        """
+        Run one PI-MAC update phase.
+
+        Each epoch samples on-policy finalized episodes, pads to a dense batch, applies
+        PPO + value + distillation objectives, logs diagnostics, then clears memory.
+        """
         if len(self.memory) < self.batch_size:
             return
 
         epoch_losses = []
         for _ in range(self.num_epochs):
             batch = random.sample(self.memory, self.batch_size)
-            max_t = max(int(ep["T"]) for ep in batch)
-            max_n = max(int(ep["N"]) for ep in batch)
+            minibatch = self._build_minibatch_tensors(batch)
+            obs = minibatch["obs"]
+            actions = minibatch["actions"]
+            active_mask = minibatch["active_mask"]
+            old_log_probs = minibatch["old_log_probs"]
+            advantages = self._normalize_advantages(minibatch["advantages"], minibatch["valid_time"])
+            returns = minibatch["returns"]
+            time_mask = minibatch["time_mask"]
+            combined_mask = minibatch["combined_mask"]
+            valid_time = minibatch["valid_time"]
 
-            if (not self.share_parameters) and max_n > self.num_agents:
-                raise ValueError("max_n exceeds configured number of non-shared actor networks.")
-
-            def pad_time(x, pad_value=0.0):
-                t = x.shape[0]
-                if t == max_t:
-                    return x
-                pad_shape = (max_t - t,) + x.shape[1:]
-                pad = np.full(pad_shape, pad_value, dtype=x.dtype)
-                return np.concatenate([x, pad], axis=0)
-
-            def pad_time_agents(x, pad_value=0.0):
-                t, n = x.shape[0], x.shape[1]
-                if t == max_t and n == max_n:
-                    return x
-                pad_width = [(0, max_t - t), (0, max_n - n)] + [(0, 0)] * (x.ndim - 2)
-                return np.pad(x, pad_width, mode="constant", constant_values=pad_value)
-
-            obs = torch.as_tensor(
-                np.stack([pad_time_agents(ep["obs"]) for ep in batch]),
-                device=self.device,
-                dtype=torch.float32,
+            policy_terms = self._compute_policy_terms(
+                obs=obs,
+                actions=actions,
+                old_log_probs=old_log_probs,
+                advantages=advantages,
+                combined_mask=combined_mask,
             )
-            actions = torch.as_tensor(
-                np.stack([pad_time_agents(ep["actions"], pad_value=0) for ep in batch]),
-                device=self.device,
-                dtype=torch.int64,
-            )
-            active_mask = torch.as_tensor(
-                np.stack([pad_time_agents(ep["active_mask"], pad_value=0.0) for ep in batch]),
-                device=self.device,
-                dtype=torch.float32,
-            )
-            old_log_probs = torch.as_tensor(
-                np.stack([pad_time_agents(ep["old_log_probs"], pad_value=0.0) for ep in batch]),
-                device=self.device,
-                dtype=torch.float32,
-            )
-            advantages = torch.as_tensor(
-                np.stack([pad_time(ep["advantages"], pad_value=0.0) for ep in batch]),
-                device=self.device,
-                dtype=torch.float32,
-            )
-            returns = torch.as_tensor(
-                np.stack([pad_time(ep["returns"], pad_value=0.0) for ep in batch]),
-                device=self.device,
-                dtype=torch.float32,
+            value_distill_terms = self._compute_value_and_distillation_terms(
+                obs=obs,
+                active_mask=active_mask,
+                returns=returns,
+                valid_time=valid_time,
+                combined_mask=combined_mask,
+                decision_denom=policy_terms["decision_denom"],
+                actor_aux=policy_terms["actor_aux"],
             )
 
-            action_masks = None
-            if all(ep.get("action_masks") is not None for ep in batch):
-                action_masks = torch.as_tensor(
-                    np.stack([pad_time_agents(ep["action_masks"], pad_value=0) for ep in batch]),
-                    device=self.device,
-                    dtype=torch.int8,
-                )
-
-            lengths = torch.as_tensor([int(ep["T"]) for ep in batch], device=self.device, dtype=torch.int64)
-            time_mask = (
-                torch.arange(max_t, device=self.device).unsqueeze(0) < lengths.unsqueeze(1)
-            ).to(dtype=torch.float32)
-
-            combined_mask = active_mask * time_mask.unsqueeze(-1)
-            valid_time = time_mask * (active_mask.sum(dim=2) > 0.0).to(dtype=torch.float32)
-
-            if self.normalize_advantage:
-                flat_adv = advantages[valid_time.bool()]
-                if flat_adv.numel() > 0:
-                    adv_mean = flat_adv.mean()
-                    adv_std = flat_adv.std(unbiased=False)
-                    advantages = (advantages - adv_mean) / (adv_std + 1e-8)
-
-            logits, actor_aux = self._actor_forward(obs, return_aux=True)
-            if action_masks is not None:
-                logits = self._apply_action_masks(logits, action_masks)
-
-            dist = torch.distributions.Categorical(logits=logits)
-            new_log_probs = dist.log_prob(actions)
-            entropy = dist.entropy()
-
-            adv_expanded = advantages.unsqueeze(-1).expand_as(new_log_probs)
-            ratio = torch.exp(new_log_probs - old_log_probs)
-            surr1 = ratio * adv_expanded
-            surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * adv_expanded
-
-            decision_denom = combined_mask.sum().clamp(min=1.0)
-            policy_loss = -(torch.min(surr1, surr2) * combined_mask).sum() / decision_denom
-            entropy_bonus = (entropy * combined_mask).sum() / decision_denom
-
-            critic_mask = self._sample_teacher_mask(active_mask, self.teacher_drop_prob)
-            values, _, _ = self.critic(obs, critic_mask, return_details=True)
-            value_loss = (((returns - values) ** 2) * valid_time).sum() / valid_time.sum().clamp(min=1.0)
-
-            teacher_for_targets = self._teacher_for_targets()
-            with torch.no_grad():
-                _, ctx_tgt = teacher_for_targets(obs, active_mask)
-
-            ctx_mu = actor_aux["ctx_mu"]
-            ctx_logvar = actor_aux["ctx_logvar"]
-            gate = actor_aux["gate"].squeeze(-1)
-
-            distill_nll = 0.5 * torch.exp(-ctx_logvar) * ((ctx_mu - ctx_tgt) ** 2) + 0.5 * ctx_logvar
-            distill_per_agent = distill_nll.sum(dim=-1)
-            distill_loss = (distill_per_agent * combined_mask).sum() / decision_denom
-
-            distill_mse_per_agent = ((ctx_mu - ctx_tgt) ** 2).mean(dim=-1)
-            distill_mse = (distill_mse_per_agent * combined_mask).sum() / decision_denom
+            policy_loss = policy_terms["policy_loss"]
+            entropy_bonus = policy_terms["entropy_bonus"]
+            ratio = policy_terms["ratio"]
+            new_log_probs = policy_terms["new_log_probs"]
+            decision_denom = policy_terms["decision_denom"]
+            value_loss = value_distill_terms["value_loss"]
+            distill_loss = value_distill_terms["distill_loss"]
+            distill_mse = value_distill_terms["distill_mse"]
+            values = value_distill_terms["values"]
+            ctx_logvar = value_distill_terms["ctx_logvar"]
+            gate = value_distill_terms["gate"]
+            teacher_for_targets = value_distill_terms["teacher_for_targets"]
 
             ppo_loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy_bonus
             loss = ppo_loss + self.distill_weight * distill_loss
@@ -1221,64 +1115,22 @@ class PIMAC(BaseLearningModel):
             self.optimizer.step()
             self._update_target_teacher()
 
-            # PPO diagnostics.
-            with torch.no_grad():
-                log_ratio = new_log_probs - old_log_probs
-                approx_kl = ((-log_ratio) * combined_mask).sum() / decision_denom
-                clip_frac = (((ratio - 1.0).abs() > self.clip_eps).to(dtype=torch.float32) * combined_mask).sum()
-                clip_frac = clip_frac / decision_denom
-
-                vt = valid_time.bool()
-                if vt.any():
-                    returns_valid = returns[vt]
-                    values_valid = values.detach()[vt]
-                    var_returns = torch.var(returns_valid, unbiased=False)
-                    if float(var_returns.item()) > 1e-8:
-                        explained_variance = 1.0 - (
-                            torch.var(returns_valid - values_valid, unbiased=False) / (var_returns + 1e-8)
-                        )
-                    else:
-                        explained_variance = torch.tensor(0.0, device=self.device)
-                else:
-                    explained_variance = torch.tensor(0.0, device=self.device)
-
-                # Teacher interpretability metrics on full masks.
-                tokens_full, ctx_full_online = self.critic.teacher(obs, active_mask)
-                token_norm = torch.linalg.norm(tokens_full, dim=-1)
-                token_mask = valid_time.unsqueeze(-1).expand_as(token_norm)
-                token_norm_mean = self._masked_mean(token_norm, token_mask)
-
-                teacher_ctx_norm = torch.linalg.norm(ctx_full_online, dim=-1)
-                teacher_ctx_norm_mean = self._masked_mean(teacher_ctx_norm, combined_mask)
-
-                # Metric-only consistency diagnostic using target teacher.
-                diag_drop_mask = self._sample_teacher_mask(active_mask, self.teacher_drop_prob)
-                _, ctx_full_diag = teacher_for_targets(obs, active_mask)
-                _, ctx_drop_diag = teacher_for_targets(obs, diag_drop_mask)
-                diag_mask = diag_drop_mask * time_mask.unsqueeze(-1)
-                ctx_l2 = torch.sqrt(((ctx_full_diag - ctx_drop_diag) ** 2).sum(dim=-1) + 1e-12)
-                ctx_consistency_l2 = self._masked_mean(ctx_l2, diag_mask)
-
-                logvar_mean_per_agent = ctx_logvar.mean(dim=-1)
-                selected_logvar = logvar_mean_per_agent[combined_mask.bool()]
-                if selected_logvar.numel() > 0:
-                    ctx_logvar_mean = selected_logvar.mean()
-                    ctx_logvar_std = selected_logvar.std(unbiased=False)
-                else:
-                    ctx_logvar_mean = torch.tensor(0.0, device=self.device)
-                    ctx_logvar_std = torch.tensor(0.0, device=self.device)
-
-                selected_gate = gate[combined_mask.bool()]
-                if selected_gate.numel() > 0:
-                    gate_mean = selected_gate.mean()
-                    gate_std = selected_gate.std(unbiased=False)
-                else:
-                    gate_mean = torch.tensor(0.0, device=self.device)
-                    gate_std = torch.tensor(0.0, device=self.device)
-
-                active_decisions = float(combined_mask.sum().item())
-                active_agents_per_step = active_mask.sum(dim=-1)
-                active_agents_mean = self._masked_mean(active_agents_per_step, valid_time)
+            diagnostics = self._compute_update_diagnostics(
+                obs=obs,
+                active_mask=active_mask,
+                time_mask=time_mask,
+                combined_mask=combined_mask,
+                valid_time=valid_time,
+                returns=returns,
+                values=values,
+                old_log_probs=old_log_probs,
+                new_log_probs=new_log_probs,
+                ratio=ratio,
+                ctx_logvar=ctx_logvar,
+                gate=gate,
+                teacher_for_targets=teacher_for_targets,
+                decision_denom=decision_denom,
+            )
 
             total = float(loss.detach().item())
             epoch_losses.append(total)
@@ -1287,20 +1139,20 @@ class PIMAC(BaseLearningModel):
                 "value_loss": float(value_loss.detach().item()),
                 "entropy": float(entropy_bonus.detach().item()),
                 "total_loss": total,
-                "approx_kl": float(approx_kl.detach().item()),
-                "clip_frac": float(clip_frac.detach().item()),
-                "explained_variance": float(explained_variance.detach().item()),
+                "approx_kl": float(diagnostics["approx_kl"].detach().item()),
+                "clip_frac": float(diagnostics["clip_frac"].detach().item()),
+                "explained_variance": float(diagnostics["explained_variance"].detach().item()),
                 "distill_loss": float(distill_loss.detach().item()),
                 "distill_mse": float(distill_mse.detach().item()),
-                "ctx_logvar_mean": float(ctx_logvar_mean.detach().item()),
-                "ctx_logvar_std": float(ctx_logvar_std.detach().item()),
-                "gate_mean": float(gate_mean.detach().item()),
-                "gate_std": float(gate_std.detach().item()),
-                "token_norm_mean": float(token_norm_mean.detach().item()),
-                "teacher_ctx_norm_mean": float(teacher_ctx_norm_mean.detach().item()),
-                "ctx_consistency_l2": float(ctx_consistency_l2.detach().item()),
-                "active_decisions": active_decisions,
-                "active_agents_mean": float(active_agents_mean.detach().item()),
+                "ctx_logvar_mean": float(diagnostics["ctx_logvar_mean"].detach().item()),
+                "ctx_logvar_std": float(diagnostics["ctx_logvar_std"].detach().item()),
+                "gate_mean": float(diagnostics["gate_mean"].detach().item()),
+                "gate_std": float(diagnostics["gate_std"].detach().item()),
+                "token_norm_mean": float(diagnostics["token_norm_mean"].detach().item()),
+                "teacher_ctx_norm_mean": float(diagnostics["teacher_ctx_norm_mean"].detach().item()),
+                "ctx_consistency_l2": float(diagnostics["ctx_consistency_l2"].detach().item()),
+                "active_decisions": float(diagnostics["active_decisions"]),
+                "active_agents_mean": float(diagnostics["active_agents_mean"].detach().item()),
             }
             self.loss_history.append(self.last_losses.copy())
 
@@ -1309,24 +1161,209 @@ class PIMAC(BaseLearningModel):
 
         # PPO is on-policy; old trajectories are stale after an update.
         self.memory.clear()
-        self.decay_temperature()
-
-    def decay_temperature(self) -> None:
-        """Compatibility helper for old scripts that controlled exploration temperature."""
-        self.temperature = max(self.temp_min, self.temperature * self.temp_decay)
 
     def set_eval_mode(self) -> None:
-        if self.share_parameters:
-            self.actor_net.eval()
-        else:
-            self.actor_nets.eval()
+        self.actor_net.eval()
         self.critic.eval()
         self.target_teacher.eval()
 
     def set_train_mode(self) -> None:
-        if self.share_parameters:
-            self.actor_net.train()
-        else:
-            self.actor_nets.train()
+        self.actor_net.train()
         self.critic.train()
         self.target_teacher.eval()
+
+
+class PIMACAEC(PIMACBase):
+    """
+    PI-MAC interface for AEC/OpenURB style environments.
+
+    This class exposes single-agent action selection and AEC cycle helpers while
+    delegating all optimization/math to `PIMACBase`.
+    """
+
+    def act(
+        self,
+        state: np.ndarray,
+        agent_index: Optional[object] = None,
+    ) -> int:
+        """
+        Select one action for one currently acting agent.
+        """
+        if agent_index is None:
+            agent_index = 0
+
+        return self._act_single(
+            state=state,
+            actor_key=agent_index,
+        )
+
+    def store_episode(
+        self,
+        observations: np.ndarray,
+        actions: np.ndarray,
+        rewards: np.ndarray,
+        active_mask: np.ndarray,
+        global_state: Optional[np.ndarray] = None,
+    ) -> None:
+        """
+        Convenience helper for OpenURB one-step daily transitions.
+
+        A one-step episode is represented by providing the same active mask for
+        current/next slots and a zero next-observation placeholder.
+        """
+        zeros_obs = np.zeros_like(np.asarray(observations, dtype=np.float32))
+        state = self._ensure_state(global_state)
+        zeros_state = np.zeros_like(state)
+        self.store_transition(
+            observations=observations,
+            actions=actions,
+            rewards=rewards,
+            active_mask=active_mask,
+            global_state=state,
+            next_observations=zeros_obs,
+            next_active_mask=active_mask,
+            next_global_state=zeros_state,
+            done=True,
+        )
+
+    def aec_begin_cycle(self, agent_ids_current: Sequence[object]) -> None:
+        """Start one AEC joint cycle before recording per-agent turns."""
+        self._aec_cycle = {
+            "agent_ids": list(agent_ids_current),
+            "obs": {},
+            "actions": {},
+            "rewards": {},
+            "next_obs": {},
+            "dones": {},
+        }
+
+    def aec_record(
+        self,
+        agent_id: object,
+        obs: np.ndarray,
+        action: Optional[int],
+        reward: float,
+        next_obs: Optional[np.ndarray],
+        done: bool,
+    ) -> None:
+        """Record one agent turn inside the active AEC cycle."""
+        if self._aec_cycle is None:
+            raise RuntimeError("Call aec_begin_cycle before aec_record.")
+        self._aec_cycle["obs"][agent_id] = obs
+        self._aec_cycle["actions"][agent_id] = 0 if action is None else int(action)
+        self._aec_cycle["rewards"][agent_id] = float(reward)
+        if next_obs is None:
+            next_obs = np.zeros_like(np.asarray(obs, dtype=np.float32))
+        self._aec_cycle["next_obs"][agent_id] = next_obs
+        self._aec_cycle["dones"][agent_id] = bool(done)
+
+    def aec_end_cycle(
+        self,
+        global_state: Optional[np.ndarray] = None,
+        next_global_state: Optional[np.ndarray] = None,
+        done_all: bool = False,
+    ) -> None:
+        """Finalize and store a joint transition for the current AEC cycle."""
+        if self._aec_cycle is None:
+            raise RuntimeError("Call aec_begin_cycle before aec_end_cycle.")
+        done = bool(done_all) or all(self._aec_cycle["dones"].values())
+        self.store_transition(
+            observations=self._aec_cycle["obs"],
+            actions=self._aec_cycle["actions"],
+            rewards=self._aec_cycle["rewards"],
+            active_mask=None,
+            global_state=global_state,
+            next_observations=self._aec_cycle["next_obs"],
+            next_active_mask=None,
+            next_global_state=next_global_state,
+            done=done,
+            agent_ids=self._aec_cycle["agent_ids"],
+        )
+        self._aec_cycle = None
+
+
+class PIMACParallel(PIMACBase):
+    """
+    PI-MAC interface for parallel multi-agent environments.
+    """
+
+    def act(
+        self,
+        state: np.ndarray,
+        agent_index: Optional[object] = None,
+    ) -> int:
+        """
+        Single-agent action helper for parallel setups.
+
+        `agent_index` should be the environment agent id used as recurrent-state key.
+        Prefer `act_parallel` for regular use.
+        """
+        if agent_index is None:
+            raise ValueError("PIMACParallel.act requires agent_index. Prefer act_parallel for parallel environments.")
+        return self._act_single(state=state, actor_key=agent_index)
+
+    def act_parallel(self, obs_dict: dict) -> dict:
+        """
+        Convert parallel observations into one action per currently present agent.
+        """
+        actions = {}
+        for agent_id in _sorted_agent_ids(obs_dict.keys()):
+            actions[agent_id] = self._act_single(
+                state=obs_dict[agent_id],
+                actor_key=agent_id,
+            )
+        return actions
+
+    @staticmethod
+    def _resolve_parallel_done(done_dict) -> bool:
+        """
+        Resolve parallel `done` containers.
+
+        Supported formats:
+        - dict with `"__all__"` key
+        - dict without `"__all__"`: interpreted as all(per_agent_done)
+        - scalar bool-like value
+        """
+        if isinstance(done_dict, dict):
+            if "__all__" in done_dict:
+                return bool(done_dict.get("__all__", False))
+            if not done_dict:
+                return False
+            return all(bool(flag) for flag in done_dict.values())
+        return bool(done_dict)
+
+    def store_parallel_step(
+        self,
+        obs_dict: dict,
+        action_dict: dict,
+        reward_dict: dict,
+        next_obs_dict: dict,
+        done_dict,
+        active_mask_dict: Optional[dict] = None,
+        next_active_mask_dict: Optional[dict] = None,
+        global_state: Optional[np.ndarray] = None,
+        next_global_state: Optional[np.ndarray] = None,
+    ) -> None:
+        """
+        Store one parallel-env joint transition.
+
+        `active_mask_dict` and `next_active_mask_dict` are optional; when omitted,
+        active entries default to 1.0 for all ids present in the corresponding
+        observation dict.
+        """
+        done = self._resolve_parallel_done(done_dict)
+        self.store_transition(
+            observations=obs_dict,
+            actions=action_dict,
+            rewards=reward_dict,
+            active_mask=active_mask_dict,
+            global_state=global_state,
+            next_observations=next_obs_dict,
+            next_active_mask=next_active_mask_dict,
+            next_global_state=next_global_state,
+            done=done,
+        )
+
+
+# Minimal compatibility alias for existing call sites that still import `PIMAC`.
+PIMAC = PIMACAEC

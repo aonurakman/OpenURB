@@ -9,7 +9,7 @@ if repo_root not in sys.path:
 import numpy as np
 import torch
 
-from algorithms.pimac import PIMAC
+from algorithms.pimac import PIMACParallel
 from external_tasks.common import make_run_dir, plot_curves, save_gif, set_global_seeds
 
 
@@ -70,12 +70,9 @@ def main():
         distill_weight=0.1,
         ctx_logvar_min=-6.0,
         ctx_logvar_max=4.0,
-        set_embed_dim=64,
-        set_hidden_sizes=(64, 64),
         critic_hidden_sizes=(64, 64),
-        share_parameters=True,
     )
-    pimac = PIMAC(obs_size, action_space_size, num_agents=n_agents, device=device, **pimac_kwargs)
+    pimac = PIMACParallel(obs_size, action_space_size, num_agents=n_agents, device=device, **pimac_kwargs)
 
     out_dir = make_run_dir("simple_spread_v3", "pimac")
     best_ckpt_path = os.path.join(out_dir, "best_checkpoint.pt")
@@ -102,14 +99,15 @@ def main():
             trunc = {aid: False for aid in agent_ids}
             total = 0.0
             while True:
-                actions = {}
-                for idx, aid in enumerate(agent_ids):
+                obs_dict = {}
+                for aid in agent_ids:
                     if term[aid] or trunc[aid]:
                         continue
                     o = obs[aid]
                     if obs_clip is not None:
                         o = np.clip(o, -obs_clip, obs_clip).astype(np.float32, copy=False)
-                    actions[aid] = pimac.act(o, agent_index=idx)
+                    obs_dict[aid] = o
+                actions = pimac.act_parallel(obs_dict)
                 obs, rewards, terminations, truncations, _ = env.step(actions)
                 for aid in agent_ids:
                     total += float(rewards.get(aid, 0.0))
@@ -138,20 +136,28 @@ def main():
             except Exception:
                 state_before = None
 
-            actions = {}
+            obs_dict = {}
             obs_batch = np.zeros((n_agents, obs_size), dtype=np.float32)
             actions_batch = np.zeros(n_agents, dtype=np.int64)
-            active_mask = np.ones(n_agents, dtype=np.float32)
+            active_mask = np.zeros(n_agents, dtype=np.float32)
+            # Build activity directly from live observations instead of assuming all agents
+            # remain synchronized; this stays correct if a subset terminates earlier.
             for idx, aid in enumerate(agent_ids):
-                if term[aid] or trunc[aid]:
+                if term.get(aid, False) or trunc.get(aid, False):
+                    continue
+                if aid not in obs:
                     continue
                 o = obs[aid]
                 if obs_clip is not None:
                     o = np.clip(o, -obs_clip, obs_clip).astype(np.float32, copy=False)
-                a = pimac.act(o, agent_index=idx)
-                actions[aid] = a
+                obs_dict[aid] = o
                 obs_batch[idx] = o
-                actions_batch[idx] = int(a)
+                active_mask[idx] = 1.0
+
+            actions = pimac.act_parallel(obs_dict)
+            for idx, aid in enumerate(agent_ids):
+                if aid in actions:
+                    actions_batch[idx] = int(actions[aid])
 
             next_obs, rewards, terminations, truncations, _ = env.step(actions)
             global_step += 1
@@ -162,19 +168,27 @@ def main():
                 state_after = None
 
             next_obs_batch = np.zeros((n_agents, obs_size), dtype=np.float32)
-            next_active_mask = np.ones(n_agents, dtype=np.float32)
+            next_active_mask = np.zeros(n_agents, dtype=np.float32)
             rewards_batch = np.zeros(n_agents, dtype=np.float32)
             for idx, aid in enumerate(agent_ids):
                 r = float(rewards.get(aid, 0.0))
                 rewards_batch[idx] = r
                 ep_reward_sum += r
-                if not (bool(terminations.get(aid, False)) or bool(truncations.get(aid, False))):
-                    no = next_obs[aid]
-                    if obs_clip is not None:
-                        no = np.clip(no, -obs_clip, obs_clip).astype(np.float32, copy=False)
-                    next_obs_batch[idx] = no
+                if bool(terminations.get(aid, False)) or bool(truncations.get(aid, False)):
+                    continue
+                if aid not in next_obs:
+                    continue
+                no = next_obs[aid]
+                if obs_clip is not None:
+                    no = np.clip(no, -obs_clip, obs_clip).astype(np.float32, copy=False)
+                next_obs_batch[idx] = no
+                next_active_mask[idx] = 1.0
 
-            done = all(bool(terminations.get(a, False)) or bool(truncations.get(a, False)) for a in agent_ids)
+            done = all(
+                bool(terminations.get(aid, term.get(aid, False)))
+                or bool(truncations.get(aid, trunc.get(aid, False)))
+                for aid in agent_ids
+            )
             s = state_before if state_before is not None else get_state_fallback(obs_batch)
             ns = state_after if state_after is not None else get_state_fallback(next_obs_batch)
 
@@ -191,8 +205,9 @@ def main():
             )
 
             obs = next_obs
-            term = {k: bool(v) for k, v in terminations.items()}
-            trunc = {k: bool(v) for k, v in truncations.items()}
+            # Preserve prior terminal flags when a parallel env omits some keys.
+            term = {aid: bool(terminations.get(aid, term.get(aid, False))) for aid in agent_ids}
+            trunc = {aid: bool(truncations.get(aid, trunc.get(aid, False))) for aid in agent_ids}
             if done:
                 break
 
@@ -214,9 +229,7 @@ def main():
                         "env_name": "simple_spread_v3",
                         "seed": seed,
                         "pimac_kwargs": pimac_kwargs,
-                        "actor_state_dict": (
-                            pimac.actor_net.state_dict() if pimac.share_parameters else pimac.actor_nets.state_dict()
-                        ),
+                        "actor_state_dict": pimac.actor_net.state_dict(),
                         "critic_state_dict": pimac.critic.state_dict(),
                     },
                     best_ckpt_path,
@@ -246,10 +259,7 @@ def main():
 
     if os.path.exists(best_ckpt_path):
         ckpt = torch.load(best_ckpt_path, map_location="cpu")
-        if pimac.share_parameters:
-            pimac.actor_net.load_state_dict(ckpt["actor_state_dict"])
-        else:
-            pimac.actor_nets.load_state_dict(ckpt["actor_state_dict"])
+        pimac.actor_net.load_state_dict(ckpt["actor_state_dict"])
         pimac.critic.load_state_dict(ckpt["critic_state_dict"])
 
     pimac.set_eval_mode()
@@ -264,14 +274,15 @@ def main():
         term = {aid: False for aid in agent_ids}
         trunc = {aid: False for aid in agent_ids}
         while True:
-            actions = {}
-            for idx, aid in enumerate(agent_ids):
+            obs_dict = {}
+            for aid in agent_ids:
                 if term[aid] or trunc[aid]:
                     continue
                 o = obs[aid]
                 if obs_clip is not None:
                     o = np.clip(o, -obs_clip, obs_clip).astype(np.float32, copy=False)
-                actions[aid] = pimac.act(o, agent_index=idx)
+                obs_dict[aid] = o
+            actions = pimac.act_parallel(obs_dict)
             obs, _, terminations, truncations, _ = env_viz.step(actions)
             if (step_idx % max(1, int(frame_skip))) == 0 and len(frames) < max_frames:
                 frame = env_viz.render()

@@ -1,6 +1,5 @@
 {
     "training_eps": 2000,
-    "share_parameters": true,
     "buffer_size": 2048,
     "batch_size": 32,
     "lr": 0.0005,
@@ -23,11 +22,6 @@
     "distill_weight": 0.1,
     "ctx_logvar_min": -6.0,
     "ctx_logvar_max": 4.0,
-    "set_embed_dim": 192,
-    "set_hidden_sizes": [
-        192,
-        192
-    ],
     "critic_hidden_sizes": [
         192,
         192

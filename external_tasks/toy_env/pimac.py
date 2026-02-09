@@ -9,7 +9,7 @@ repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
-from algorithms.pimac import PIMAC
+from algorithms.pimac import PIMACParallel
 from external_tasks.common import make_run_dir, plot_curves, save_gif, set_global_seeds
 from external_tasks.toy_env.env import CoopLineWorldConfig, CoopLineWorldParallelEnv
 
@@ -63,12 +63,9 @@ def main():
         distill_weight=0.1,
         ctx_logvar_min=-6.0,
         ctx_logvar_max=4.0,
-        set_embed_dim=64,
-        set_hidden_sizes=(64, 64),
         critic_hidden_sizes=(64, 64),
-        share_parameters=True,
     )
-    pimac = PIMAC(obs_size, action_space_size, num_agents=n_agents, device=device, **pimac_kwargs)
+    pimac = PIMACParallel(obs_size, action_space_size, num_agents=n_agents, device=device, **pimac_kwargs)
 
     out_dir = make_run_dir("coop_line_world", "pimac")
     best_ckpt_path = os.path.join(out_dir, "best_checkpoint.pt")
@@ -92,11 +89,12 @@ def main():
             trunc = {aid: False for aid in agent_ids}
             total = 0.0
             while True:
-                actions = {}
-                for idx, aid in enumerate(agent_ids):
+                obs_dict = {}
+                for aid in agent_ids:
                     if term[aid] or trunc[aid]:
                         continue
-                    actions[aid] = pimac.act(obs[aid], agent_index=idx)
+                    obs_dict[aid] = obs[aid]
+                actions = pimac.act_parallel(obs_dict)
                 obs, rewards, terminations, truncations, _ = env.step(actions)
                 for aid in agent_ids:
                     total += float(rewards.get(aid, 0.0))
@@ -126,32 +124,36 @@ def main():
             actions_batch = np.zeros(n_agents, dtype=np.int64)
             active_mask = np.ones(n_agents, dtype=np.float32)
 
-            actions = {}
+            obs_dict = {}
             for idx, aid in enumerate(agent_ids):
                 if term[aid] or trunc[aid]:
                     active_mask[idx] = 0.0
                     continue
                 o = obs[aid]
                 obs_batch[idx] = o
-                a = pimac.act(o, agent_index=idx)
-                actions_batch[idx] = int(a)
-                actions[aid] = int(a)
+                obs_dict[aid] = o
+
+            actions = pimac.act_parallel(obs_dict)
+            for idx, aid in enumerate(agent_ids):
+                if aid in actions:
+                    actions_batch[idx] = int(actions[aid])
 
             next_obs, rewards, terminations, truncations, _ = env.step(actions)
             global_step += 1
             state_after = np.asarray(env.state(), dtype=np.float32).reshape(-1)
 
             next_obs_batch = np.zeros((n_agents, obs_size), dtype=np.float32)
-            next_active_mask = np.ones(n_agents, dtype=np.float32)
+            next_active_mask = np.zeros(n_agents, dtype=np.float32)
             rewards_batch = np.zeros(n_agents, dtype=np.float32)
 
             for idx, aid in enumerate(agent_ids):
                 rewards_batch[idx] = float(rewards.get(aid, 0.0))
                 ep_reward_sum += float(rewards_batch[idx])
                 if bool(terminations.get(aid, False)) or bool(truncations.get(aid, False)):
-                    next_active_mask[idx] = 0.0
+                    continue
                 else:
                     next_obs_batch[idx] = next_obs[aid]
+                    next_active_mask[idx] = 1.0
 
             done = all(bool(terminations.get(a, False)) or bool(truncations.get(a, False)) for a in agent_ids)
 
@@ -191,9 +193,7 @@ def main():
                         "env_name": "coop_line_world",
                         "seed": seed,
                         "pimac_kwargs": pimac_kwargs,
-                        "actor_state_dict": (
-                            pimac.actor_net.state_dict() if pimac.share_parameters else pimac.actor_nets.state_dict()
-                        ),
+                        "actor_state_dict": pimac.actor_net.state_dict(),
                         "critic_state_dict": pimac.critic.state_dict(),
                     },
                     best_ckpt_path,
@@ -223,10 +223,7 @@ def main():
 
     if os.path.exists(best_ckpt_path):
         ckpt = torch.load(best_ckpt_path, map_location="cpu")
-        if pimac.share_parameters:
-            pimac.actor_net.load_state_dict(ckpt["actor_state_dict"])
-        else:
-            pimac.actor_nets.load_state_dict(ckpt["actor_state_dict"])
+        pimac.actor_net.load_state_dict(ckpt["actor_state_dict"])
         pimac.critic.load_state_dict(ckpt["critic_state_dict"])
 
     pimac.set_eval_mode()
@@ -241,11 +238,12 @@ def main():
         term = {aid: False for aid in agent_ids}
         trunc = {aid: False for aid in agent_ids}
         while True:
-            actions = {}
-            for idx, aid in enumerate(agent_ids):
+            obs_dict = {}
+            for aid in agent_ids:
                 if term[aid] or trunc[aid]:
                     continue
-                actions[aid] = pimac.act(obs[aid], agent_index=idx)
+                obs_dict[aid] = obs[aid]
+            actions = pimac.act_parallel(obs_dict)
             obs, _, terminations, truncations, _ = env_viz.step(actions)
             if (step_idx % max(1, int(frame_skip))) == 0 and len(frames) < max_frames:
                 frame = env_viz.render()
