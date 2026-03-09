@@ -1,0 +1,26 @@
+{
+    "training_eps": 2000,
+    "batch_size": 16,
+    "update_every": 8,
+    "lr": 0.0007,
+    "num_epochs": 6,
+    "num_hidden": 2,
+    "widths": [
+        64,
+        128,
+        64
+    ],
+    "rnn_hidden_dim": 64,
+    "critic_hidden_sizes": [
+        128,
+        128
+    ],
+    "clip_eps": 0.2,
+    "normalize_advantage": true,
+    "entropy_coef": 0.05,
+    "value_coef": 0.5,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "max_grad_norm": 1.0,
+    "buffer_size": 2048
+}
