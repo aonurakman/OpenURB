@@ -219,3 +219,4 @@ archive/
 # Local agent guidance (generated, not committed)
 AGENTS.md
 .agents/
+QA.md
