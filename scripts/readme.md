@@ -5,7 +5,11 @@ We provide training scripts for open vs. conditional switching variants:
 - `open_iql.py` runs an IQL setup with open switching.
 - `open_qmix.py` runs a QMIX setup with open switching.
 - `open_vdn.py` runs a VDN (Value Decomposition Networks) setup with open switching.
-- `open_pimac.py` runs PI-MAC setup with open switching.
+- `open_mappo.py` runs canonical MAPPO (CTDE) with open switching.
+- `open_pimac_v0.py` runs MAPPO-style PPO with a Deep-Sets centralized critic (set-encoder baseline).
+- `open_pimac_v1.py` runs PIMAC_v1 (PIMAC_v0 + token cross-attention teacher and student-context distillation).
+- `open_pimac_v2.py` runs PIMAC_v2 (PIMAC_v1 + uncertainty-gated FiLM policy conditioning).
+- `open_pimac_v3.py` runs PIMAC_v3 (PIMAC_v2 + context-conditioned low-rank hypernetwork policy-head residuals).
 - `cond_` prepend signifies dynamic switching probabilities based on group travel time ratio.
 
 Baseline scripts are `open_baselines.py` and `cond_open_baselines.py` (see `baseline_models/readme.md`
@@ -15,8 +19,20 @@ and require task configs from `config/task_config/`.
 All scripts automatically run `analysis/metrics.py` at the end of an experiment to generate KPI outputs
 in the experiment's `results/<exp_id>/metrics/` folder.
 
-PI-MAC scripts additionally persist per-update optimization diagnostics to
-`results/<exp_id>/pimac_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
+MAPPO scripts additionally persist per-update optimization diagnostics to
+`results/<exp_id>/mappo_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
+
+PIMAC_v0 scripts additionally persist per-update optimization diagnostics to
+`results/<exp_id>/pimac_v0_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
+
+PIMAC_v1 scripts additionally persist per-update optimization diagnostics to
+`results/<exp_id>/pimac_v1_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
+
+PIMAC_v2 scripts additionally persist per-update optimization diagnostics to
+`results/<exp_id>/pimac_v2_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
+
+PIMAC_v3 scripts additionally persist per-update optimization diagnostics to
+`results/<exp_id>/pimac_v3_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
 
 ### Weights & Biases logging
 

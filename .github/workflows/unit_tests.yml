@@ -41,4 +41,4 @@ jobs:
           python -m pip install pytest
 
       - name: Run unit tests
-        run: python -m pytest -rs tests/test_iql.py tests/test_ippo.py tests/test_pimac.py tests/test_qmix.py tests/test_vdn.py tests/test_metrics.py
+        run: python -m pytest -rs tests/test_iql.py tests/test_ippo.py tests/test_mappo.py tests/test_pimac_v0.py tests/test_pimac_v1.py tests/test_pimac_v2.py tests/test_pimac_v3.py tests/test_qmix.py tests/test_vdn.py tests/test_metrics.py

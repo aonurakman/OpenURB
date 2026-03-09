@@ -6,12 +6,16 @@ algorithms in `algorithms/` can learn on small **multi-step** environments.
 Outputs are written under `external_tasks/runs/<env>/<algo>/<timestamp>/`:
 - `learning_curves.png`
 - `episode_rewards.npy`, `episode_losses.npy`, `eval_rewards.npy`
-- `pimac_loss_history.json` (for PI-MAC runs; rich per-update diagnostics)
+- `mappo_loss_history.json` (for MAPPO runs; per-update diagnostics)
+- `pimac_v0_loss_history.json` (for PIMAC_v0 runs; set-critic MAPPO diagnostics)
+- `pimac_v1_loss_history.json` (for PIMAC_v1 runs; token teacher-student diagnostics)
+- `pimac_v2_loss_history.json` (for PIMAC_v2 runs; FiLM-gated token teacher-student diagnostics)
+- `pimac_v3_loss_history.json` (for PIMAC_v3 runs; FiLM + hypernetwork token teacher-student diagnostics)
 - `best_checkpoint.pt` (best eval reward)
 - `policy_rollout.gif` (rollout of the best checkpoint; always headless)
 
-PI-MAC sanity scripts use the v-next MAPPO-style actor plus token teacher-critic, heteroscedastic distillation,
-and uncertainty-gated FiLM from `algorithms/pimac.py`.
+PIMAC_v* sanity scripts use MAPPO-style on-policy optimization with a token/set-based centralized critic
+and progressively stronger decentralized policy conditioning.
 
 ### Environments
 
@@ -32,12 +36,31 @@ python external_tasks/simple_spread/iql.py
 python external_tasks/simple_spread/ippo.py
 python external_tasks/simple_spread/qmix.py
 python external_tasks/simple_spread/vdn.py
-python external_tasks/simple_spread/pimac.py
+python external_tasks/simple_spread/mappo.py
+python external_tasks/simple_spread/pimac_v0.py
+python external_tasks/simple_spread/pimac_v1.py
+python external_tasks/simple_spread/pimac_v2.py
+python external_tasks/simple_spread/pimac_v3.py
 
 python external_tasks/toy_env/random_policy.py
 python external_tasks/toy_env/iql.py
 python external_tasks/toy_env/ippo.py
 python external_tasks/toy_env/qmix.py
 python external_tasks/toy_env/vdn.py
-python external_tasks/toy_env/pimac.py
+python external_tasks/toy_env/mappo.py
+python external_tasks/toy_env/pimac_v0.py
+python external_tasks/toy_env/pimac_v1.py
+python external_tasks/toy_env/pimac_v2.py
+python external_tasks/toy_env/pimac_v3.py
+
+python external_tasks/simple_spread_dynamic/random_policy.py
+python external_tasks/simple_spread_dynamic/iql.py
+python external_tasks/simple_spread_dynamic/ippo.py
+python external_tasks/simple_spread_dynamic/qmix.py
+python external_tasks/simple_spread_dynamic/vdn.py
+python external_tasks/simple_spread_dynamic/mappo.py
+python external_tasks/simple_spread_dynamic/pimac_v0.py
+python external_tasks/simple_spread_dynamic/pimac_v1.py
+python external_tasks/simple_spread_dynamic/pimac_v2.py
+python external_tasks/simple_spread_dynamic/pimac_v3.py
 ```

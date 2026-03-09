@@ -94,7 +94,7 @@ python scripts/<script_name>.py [--id <exp_id>] --alg-conf <hyperparam_id> --env
 
 where
 
-- ```<script_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, ```cond_open_ippo```, ```open_qmix```, ```cond_open_qmix```, ```open_vdn```, ```cond_open_vdn```, ```open_pimac```, and ```cond_open_pimac```,
+- ```<script_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, ```cond_open_ippo```, ```open_qmix```, ```cond_open_qmix```, ```open_vdn```, ```cond_open_vdn```, ```open_mappo```, ```cond_open_mappo```, ```open_pimac_v0```, ```cond_open_pimac_v0```, ```open_pimac_v1```, ```cond_open_pimac_v1```, ```open_pimac_v2```, ```cond_open_pimac_v2```, ```open_pimac_v3```, and ```cond_open_pimac_v3```,
 - ```<exp_id>``` is an optional experiment identifier, for instance ```random_ing```,
 - ```<hyperparam_id>``` is the hyperparameterization identifier, it must correspond to a `.json` filename (without extension) in [`config/algo_config`](config/algo_config/). Provided scripts automatically select the algorithm-specific subfolder in this directory.
 - ```<env_conf_id>``` is the environment configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/env_config`](config/env_config/). It is used to parameterize environment-specific processes, such as path generation, disk operations, etc. It is **optional** and by default is set to `config1`.
@@ -158,7 +158,11 @@ We provide training scripts for open vs. conditional switching variants:
 - `open_iql.py` runs an IQL setup with open switching.
 - `open_qmix.py` runs a QMIX setup with open switching.
 - `open_vdn.py` runs a VDN (Value Decomposition Networks) setup with open switching.
-- `open_pimac.py` runs PI-MAC setup with open switching.
+- `open_mappo.py` runs canonical MAPPO (CTDE) with open switching.
+- `open_pimac_v0.py` runs MAPPO-style PPO with a Deep-Sets centralized critic (set-encoder baseline).
+- `open_pimac_v1.py` runs PIMAC_v1 (PIMAC_v0 + token cross-attention teacher and student-context distillation).
+- `open_pimac_v2.py` runs PIMAC_v2 (PIMAC_v1 + uncertainty-gated FiLM policy conditioning).
+- `open_pimac_v3.py` runs PIMAC_v3 (PIMAC_v2 + context-conditioned low-rank hypernetwork policy-head residuals).
 - `cond_` prepend signifies dynamic switching probabilities based on group travel time ratio.
 
 Baseline scripts are `open_baselines.py` and `cond_open_baselines.py` (see `baseline_models/readme.md`
@@ -168,8 +172,20 @@ and require task configs from `config/task_config/`.
 All scripts automatically run `analysis/metrics.py` at the end of an experiment to generate KPI outputs
 in the experiment's `results/<exp_id>/metrics/` folder.
 
-PI-MAC scripts additionally persist per-update optimization diagnostics to
-`results/<exp_id>/pimac_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
+MAPPO scripts additionally persist per-update optimization diagnostics to
+`results/<exp_id>/mappo_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
+
+PIMAC_v0 scripts additionally persist per-update optimization diagnostics to
+`results/<exp_id>/pimac_v0_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
+
+PIMAC_v1 scripts additionally persist per-update optimization diagnostics to
+`results/<exp_id>/pimac_v1_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
+
+PIMAC_v2 scripts additionally persist per-update optimization diagnostics to
+`results/<exp_id>/pimac_v2_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
+
+PIMAC_v3 scripts additionally persist per-update optimization diagnostics to
+`results/<exp_id>/pimac_v3_loss_history.json` (while keeping `losses.csv` and mean-loss plots).
 
 ### Weights & Biases logging
 
@@ -204,12 +220,16 @@ algorithms in `algorithms/` can learn on small **multi-step** environments.
 Outputs are written under `external_tasks/runs/<env>/<algo>/<timestamp>/`:
 - `learning_curves.png`
 - `episode_rewards.npy`, `episode_losses.npy`, `eval_rewards.npy`
-- `pimac_loss_history.json` (for PI-MAC runs; rich per-update diagnostics)
+- `mappo_loss_history.json` (for MAPPO runs; per-update diagnostics)
+- `pimac_v0_loss_history.json` (for PIMAC_v0 runs; set-critic MAPPO diagnostics)
+- `pimac_v1_loss_history.json` (for PIMAC_v1 runs; token teacher-student diagnostics)
+- `pimac_v2_loss_history.json` (for PIMAC_v2 runs; FiLM-gated token teacher-student diagnostics)
+- `pimac_v3_loss_history.json` (for PIMAC_v3 runs; FiLM + hypernetwork token teacher-student diagnostics)
 - `best_checkpoint.pt` (best eval reward)
 - `policy_rollout.gif` (rollout of the best checkpoint; always headless)
 
-PI-MAC sanity scripts use the v-next MAPPO-style actor plus token teacher-critic, heteroscedastic distillation,
-and uncertainty-gated FiLM from `algorithms/pimac.py`.
+PIMAC_v* sanity scripts use MAPPO-style on-policy optimization with a token/set-based centralized critic
+and progressively stronger decentralized policy conditioning.
 
 ### Environments
 
@@ -230,14 +250,33 @@ python external_tasks/simple_spread/iql.py
 python external_tasks/simple_spread/ippo.py
 python external_tasks/simple_spread/qmix.py
 python external_tasks/simple_spread/vdn.py
-python external_tasks/simple_spread/pimac.py
+python external_tasks/simple_spread/mappo.py
+python external_tasks/simple_spread/pimac_v0.py
+python external_tasks/simple_spread/pimac_v1.py
+python external_tasks/simple_spread/pimac_v2.py
+python external_tasks/simple_spread/pimac_v3.py
 
 python external_tasks/toy_env/random_policy.py
 python external_tasks/toy_env/iql.py
 python external_tasks/toy_env/ippo.py
 python external_tasks/toy_env/qmix.py
 python external_tasks/toy_env/vdn.py
-python external_tasks/toy_env/pimac.py
+python external_tasks/toy_env/mappo.py
+python external_tasks/toy_env/pimac_v0.py
+python external_tasks/toy_env/pimac_v1.py
+python external_tasks/toy_env/pimac_v2.py
+python external_tasks/toy_env/pimac_v3.py
+
+python external_tasks/simple_spread_dynamic/random_policy.py
+python external_tasks/simple_spread_dynamic/iql.py
+python external_tasks/simple_spread_dynamic/ippo.py
+python external_tasks/simple_spread_dynamic/qmix.py
+python external_tasks/simple_spread_dynamic/vdn.py
+python external_tasks/simple_spread_dynamic/mappo.py
+python external_tasks/simple_spread_dynamic/pimac_v0.py
+python external_tasks/simple_spread_dynamic/pimac_v1.py
+python external_tasks/simple_spread_dynamic/pimac_v2.py
+python external_tasks/simple_spread_dynamic/pimac_v3.py
 ```
 
 ## Baseline models

@@ -13,7 +13,11 @@ python_script = [SCRIPTS_DIR / "open_iql.py", SCRIPTS_DIR / "cond_open_iql.py"]
 python_script += [SCRIPTS_DIR / "open_ippo.py", SCRIPTS_DIR / "cond_open_ippo.py"]
 python_script += [SCRIPTS_DIR / "open_qmix.py", SCRIPTS_DIR / "cond_open_qmix.py"]
 python_script += [SCRIPTS_DIR / "open_vdn.py", SCRIPTS_DIR / "cond_open_vdn.py"]
-python_script += [SCRIPTS_DIR / "open_pimac.py", SCRIPTS_DIR / "cond_open_pimac.py"]
+python_script += [SCRIPTS_DIR / "open_mappo.py", SCRIPTS_DIR / "cond_open_mappo.py"]
+python_script += [SCRIPTS_DIR / "open_pimac_v0.py", SCRIPTS_DIR / "cond_open_pimac_v0.py"]
+python_script += [SCRIPTS_DIR / "open_pimac_v1.py", SCRIPTS_DIR / "cond_open_pimac_v1.py"]
+python_script += [SCRIPTS_DIR / "open_pimac_v2.py", SCRIPTS_DIR / "cond_open_pimac_v2.py"]
+python_script += [SCRIPTS_DIR / "open_pimac_v3.py", SCRIPTS_DIR / "cond_open_pimac_v3.py"]
 PYTHON = sys.executable
 
 @pytest.fixture(scope="session", autouse=True)
