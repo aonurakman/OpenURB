@@ -8804,11 +8804,11 @@
         <phase duration="5"  state="rryyyr"/>
     </tlLogic>
     <tlLogic id="gneJ210" type="static" programID="0" offset="0">
-        <phase duration="38" state="GGggrrrrrrGGGG" minDur="5" maxDur="50"/>
+        <phase duration="38" state="GGggrrrrrrGGGG"/>
         <phase duration="3"  state="yyggrrrrrryyyy"/>
-        <phase duration="6"  state="GGGGrrrrrrrrrr" minDur="5" maxDur="50"/>
+        <phase duration="6"  state="GGGGrrrrrrrrrr"/>
         <phase duration="3"  state="yyyyrrrrrrrrrr"/>
-        <phase duration="37" state="rrrrGGGGGGGGrr" minDur="5" maxDur="50"/>
+        <phase duration="37" state="rrrrGGggGgGGrr"/>
         <phase duration="3"  state="rrrryyyyyyyyrr"/>
     </tlLogic>
     <tlLogic id="gneJ255" type="static" programID="0" offset="0">

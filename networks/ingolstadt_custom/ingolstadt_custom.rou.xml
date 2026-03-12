@@ -8785,7 +8785,7 @@
         <phase duration="3"  state="yyggrrrrrryyyy"/>
         <phase duration="6"  state="GGGGrrrrrrrrrr"/>
         <phase duration="3"  state="yyyyrrrrrrrrrr"/>
-        <phase duration="37" state="rrrrGGGGGGGGrr"/>
+        <phase duration="37" state="rrrrGGggGgGGrr"/>
         <phase duration="3"  state="rrrryyyyyyyyrr"/>
     </tlLogic>
     <tlLogic id="gneJ255" type="static" programID="0" offset="0">
