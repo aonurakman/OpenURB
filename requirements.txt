@@ -1,4 +1,4 @@
-git+https://github.com/COeXISTENCE-PROJECT/RouteRL-URB.git@openurb  
+git+https://github.com/COeXISTENCE-PROJECT/RouteRL-URB.git@openurb
 matplotlib>=3.9.3
 numpy>=2.0.2
 pandas>=2.2.3
@@ -7,4 +7,3 @@ tensordict==0.7.0
 torch>=2.6.0
 tqdm>=4.67.1
 wandb>=0.24.0
-pygame>=2.6.1

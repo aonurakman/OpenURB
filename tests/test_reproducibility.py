@@ -7,7 +7,7 @@ import sys
 
 from pathlib import Path
 
-# Confirms that running the conditioned OPEN script twice yields identical results.
+# Confirms that running the same conditioned script twice yields identical results.
 
 SCRIPTS_DIR = Path("scripts")
 RESULTS_DIR = Path("results")

@@ -19,7 +19,7 @@ Design choices (kept consistent with other OpenURB algorithms):
 API notes (mirrors `algorithms/qmix.py` so scripts can stay almost identical):
 - `act(obs, action_mask=None, agent_index=...)`
 - `store_episode(...)` for OpenURB's single-step "day" episodes
-- `store_transition(..., done=...)` for multi-step rollouts (used by `external_tasks/`)
+- `store_transition(..., done=...)` for multi-step rollouts in generic recurrent MARL environments
 - `learn()`, `set_eval_mode()`, `set_train_mode()`, `reset_episode()`
 """
 
@@ -578,4 +578,3 @@ class VDN(BaseLearningModel):
             self.agent_net.train()
         else:
             self.agent_nets.train()
-

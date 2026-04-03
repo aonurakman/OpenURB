@@ -1,5 +1,5 @@
 <!--
-This file is generated from docs/README.template.md. Run: python tools/build_readme.py
+This file is generated from docs/README.template.md. Run: venv/bin/python tools/build_readme.py
 -->
 ##### Forked from [URB](https://urbenchmark.com)
 
@@ -10,139 +10,85 @@ This file is generated from docs/README.template.md. Run: python tools/build_rea
 # OpenURB
 [![Leaderboard](https://img.shields.io/badge/Leaderboard-OpenURB-0aa4f6?style=for-the-badge&logo=github)](https://coexistence-project.github.io/OpenURB/)
 
-There is a microscopic traffic network in which two agent populations, human-driven vehicles (HDVs) and autonomous vehicles (AVs), make **single-step** route-choice decisions. At each departure time, a driver observes current traffic conditions, selects one of *n* routes from its origin to its destination, receives a travel-time-based reward, and the episode ends for that driver. HDVs aim to optimize individual travel time, while AVs **collectively** try to minimize group travel time.
+OpenURB is a benchmark for learning route-choice policies in mixed-autonomy traffic under changing AV population sizes. It uses RouteRL's SUMO-based `TrafficEnvironment` and keeps a stable set of benchmark methods, experiment scripts, reusable configs, and KPI tooling.
 
-Unlike static formulations, population composition is **dynamic**: humans may switch to AVs, or AV owners may revert to HDVs with some predefined probabilities. This creates a **non-stationary**, **variable-sized** multi-agent system where each action’s impact and optimality depend on the evolving mix of agents. Therefore, a good solution must handle the appearance of new cooperators and the elimination of known teammates, successfully scaling at **open environments**.
+The benchmark is method-agnostic. Its purpose is to make experiments comparable across algorithms under the same route-choice task definitions, switching rules, and evaluation pipeline.
 
-The task is to develop and evaluate RL methods that enable AV agents to learn robust, high-performing routing policies **under these switching dynamics,** while accounting for large group sizes and interactions with human drivers. The ultimate objective of this research is to **(i)** find the problem setting where the current approaches come short, **(ii)** quantify their shortcomings with relevant (potentially novel) dynamic cooperation performance metrics, and **(iii)** contribute with methodological extensions.
+## Local agent guidance
 
-### Keywords
+If you are a coding agent working in this repo, read `AGENTS.md` and the local notes under `.agents/` before editing anything.
 
-`MARL`, `route choice`, `open environment`, `ad-hoc teamwork`, `few-shot cooperation`
+## Workflow
 
-## Agent Guidance (Local)
+Each experiment script follows the same high-level routine:
+- load algorithm, environment, and task configs from `config/`,
+- build the RouteRL traffic environment on one of the networks under `networks/`,
+- run the human-driver learning phase expected by RouteRL,
+- train the AV policy with the selected method,
+- apply open or conditioned switching from the task config,
+- run evaluation episodes,
+- save outputs under `results/<exp_id>/`,
+- compute KPIs with `analysis/metrics.py`.
 
-If you are a coding agent working in this repo, read `AGENTS.md` and the docs under `.agents/` before making changes. These files are gitignored and live locally.
+## Setup
 
-## 🔗 Workflow
+### Prerequisites
 
-`OpenURB` (similar to `URB`):
-* Runs an experiment script using the `TrafficEnvironment` from `RouteRL`,
-* With a RL algorithm or a baseline method (from `baseline_models/`),
-* Opens algorithm, environment and task configuration files from `config/`,
-* Loads the network and demand from `networks`
-* Executes a typical `RouteRL` routine of
-   * first learning of human drivers,
-   * which then 'mutate` to CAVs,
-   * are trained to optimize routing policies with the implemented algorithm,
-   * THEN possibly simulating dynamic switches between humans and AVs.
-* When the training is finished, it uses raw results to compute a wide-set of KPIs.
+Install SUMO separately by following the instructions at [SUMO installation](https://sumo.dlr.de/docs/Installing/index.html).
 
----
-
-## 📦 Setup
-
-#### Prerequisites
-
-Make sure you have SUMO installed in your system. This procedure should be carried out separately, by following the instructions provided [here](https://sumo.dlr.de/docs/Installing/index.html).
-
-#### Cloning repository
-
-Clone the **OpenURB** repository from GitHub by
+### Clone the repository
 
 ```bash
 git clone https://github.com/COeXISTENCE-PROJECT/OpenURB.git
+cd OpenURB
 ```
 
-#### Creating environment
-
-- **Option 1** (Recommended): Create a virtual environment with `venv`:
+### Create an environment and install dependencies
 
 ```bash
-python -m venv .venv
-```
-
-and then install dependencies by:
-
-```bash
-cd URB
-pip install --force-reinstall --no-cache-dir -r requirements.txt
+python -m venv venv
+venv/bin/pip install --force-reinstall --no-cache-dir -r requirements.txt
 ```
 
 <!-- INCLUDE: ../networks/readme.md -->
 
-## 🔬 Running experiments
+## Running experiments
 
-#### Usage of **OpenURB** for Reinforcement Learning algorithms
+### Learning methods
 
-To run the open/cond-open RL experiments, use:
-
-```bash
-python scripts/<script_name>.py [--id <exp_id>] --alg-conf <hyperparam_id> --env-conf <env_conf_id> --task-conf <task_id> --net <net_name> --env-seed <env_seed> --torch-seed <torch_seed>
-```
-
-where
-
-- ```<script_name>``` is the script you wish to run, available scripts are ```open_iql```, ```cond_open_iql```, ```open_ippo```, ```cond_open_ippo```, ```open_qmix```, ```cond_open_qmix```, ```open_vdn```, ```cond_open_vdn```, ```open_mappo```, ```cond_open_mappo```, ```open_pimac_v0```, ```cond_open_pimac_v0```, ```open_pimac_v1```, ```cond_open_pimac_v1```, ```open_pimac_v2```, ```cond_open_pimac_v2```, ```open_pimac_v3```, and ```cond_open_pimac_v3```,
-- ```<exp_id>``` is an optional experiment identifier, for instance ```random_ing```,
-- ```<hyperparam_id>``` is the hyperparameterization identifier, it must correspond to a `.json` filename (without extension) in [`config/algo_config`](config/algo_config/). Provided scripts automatically select the algorithm-specific subfolder in this directory.
-- ```<env_conf_id>``` is the environment configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/env_config`](config/env_config/). It is used to parameterize environment-specific processes, such as path generation, disk operations, etc. It is **optional** and by default is set to `config1`.
-- ```<task_id>``` is the task configuration identifier. It must correspond to a `.json` filename (without extension) in [`config/task_config`](config/task_config/). For this repo, use the provided task configs (e.g., `config1`–`config5`) which already encode dynamic switching parameters.
-- ```<net_name>``` is the name of the network you wish to use. Must be one of the folder names in ```networks/``` i.e. ```ing_small```, ```ingolstadt_custom```, ```nangis```, ```nemours```, ```provins``` or ```saint_arnoult```,
-- ```<env_seed>``` is reproducibility random seed for the traffic environment, it is **optional** and by default is set to 42,
-- ```<torch_seed>``` is reproducibility random seed for PyTorch, it is **optional** and by default is set to 42.
-
-If `--id` is omitted, scripts auto-generate an experiment ID of the form
-`<alg-name>_<net>_a<alg_config>_e<env_config>_t<task_config>_<env_seed>_<torch_seed>`.
-Conditional scripts prepend `c_` to the ID. For baselines, `<alg-name>` is the selected model and the torch seed is omitted.
-If the generated ID already exists under `results/`, `_repeated` is appended.
-
-For example, the following command runs an experiment using:
-- IQL algorithm, hyperparameterized by `config/algo_config/iql/config1.json`,
-- The task specified in `config/task_config/config1.json`,
-- The environment parameterization specified in `config/env_config/config1.json` (by default),
-- Experiment identifier `deneme`, which will be used as the folder name in `results/` to save the experiment data,
-- Saint Arnoult network and demand, from `networks/saint_arnoult`,
-- Environment (also used for `random` and `numpy`) and PyTorch seeds 42 and 0, respectively.
+Use one of the OpenURB experiment scripts:
 
 ```bash
-python scripts/open_iql.py --id deneme --alg-conf config1 --task-conf config1 --net saint_arnoult --env-seed 42 --torch-seed 0
+venv/bin/python scripts/<script_name>.py [--id <exp_id>] --alg-conf <alg_conf> --env-conf <env_conf> --task-conf <task_conf> --net <net_name> --env-seed <env_seed> --torch-seed <torch_seed>
 ```
 
-Example for QMIX:
+where:
+- `<script_name>` is one of `open_iql`, `cond_open_iql`, `open_ippo`, `cond_open_ippo`, `open_qmix`, `cond_open_qmix`, `open_vdn`, `cond_open_vdn`, `open_mappo`, `cond_open_mappo`, `open_pimac`, or `cond_open_pimac`.
+- `<alg_conf>` is the JSON config name from `config/algo_config/<algorithm>/` without the `.json` suffix.
+- `<env_conf>` is the JSON config name from `config/env_config/` without the suffix. It is optional and defaults to `config1`.
+- `<task_conf>` is the JSON config name from `config/task_config/` without the suffix.
+- `<net_name>` is one of the network folders under `networks/`.
+- `<env_seed>` and `<torch_seed>` are optional reproducibility seeds; both default to `42`.
+
+If `--id` is omitted, the scripts generate an experiment id from the algorithm, network, configs, and seeds. Conditional scripts prepend `c_`.
+
+Example:
 
 ```bash
-python scripts/open_qmix.py --id deneme_qmix --alg-conf config1 --task-conf config1 --net saint_arnoult --env-seed 42 --torch-seed 0
+venv/bin/python scripts/open_mappo.py --alg-conf config1 --task-conf config1 --net saint_arnoult --env-seed 42 --torch-seed 0
 ```
 
-Example for VDN:
+### Baselines
+
+For non-learning baselines, use:
 
 ```bash
-python scripts/open_vdn.py --id deneme_vdn --alg-conf config1 --task-conf config1 --net saint_arnoult --env-seed 42 --torch-seed 0
+venv/bin/python scripts/open_baselines.py [--id <exp_id>] --alg-conf <alg_conf> --env-conf <env_conf> --task-conf <task_conf> --net <net_name> --env-seed <env_seed> --model <model_name>
 ```
 
-> All experiment scripts in this repo expect task configs from `config/task_config/`; those files define the dynamic switching parameters.
-
-#### Usage **URB** for baselines
-
-Similarly as for RL algorithms, you have to provide command, but there is one additional flag ```model``` for ```scripts/open_baselines.py```, and ```scripts/cond_open_baselines.py```, instead of ```torch-seed```, then you have command of form:
-
-```bash
-python scripts/open_baselines.py [--id <exp_id>] --alg-conf <hyperparam_id> --env-conf <env_conf_id> --task-conf <task_id> --net <net_name> --env-seed <env_seed> --model <model_name>
-```
-
-For a list of available baseline models, see the **Baseline models** section below.
-The open baseline scripts mirror the dynamic switching behavior: use task configs from `config/task_config/`, and `cond_open_baselines.py` conditions switches on group travel times.
-
-For example:
-
-```bash
-python scripts/open_baselines.py --id ing_aon --alg-conf config1 --task-conf config2 --net ingolstadt_custom --model aon
-```
+The conditioned baseline script is `scripts/cond_open_baselines.py`.
 
 <!-- INCLUDE: ../scripts/readme.md -->
-
-<!-- INCLUDE: ../external_tasks/readme.md -->
 
 <!-- INCLUDE: ../baseline_models/readme.md -->
 

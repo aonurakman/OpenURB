@@ -175,48 +175,47 @@ cython_debug/
 
 .DS_Store
 
-#results/
-detector/
-episodes/
-SUMO_output/
-agents.csv
-det.add.xml
-route.rou.xml
-routes.csv
-combined_data.csv
-
-# Keep sample_results fixtures tracked for tests.
-!results/sample_results/
-!results/sample_results/**
-!results/sample_results/detector/
-!results/sample_results/detector/**
-!results/sample_results/episodes/
-!results/sample_results/episodes/**
-!results/sample_results/SUMO_output/
-!results/sample_results/SUMO_output/**
-!results/sample_results/agents.csv
-!results/sample_results/det.add.xml
-!results/sample_results/losses.csv
-!results/sample_results/route.rou.xml
-!results/sample_results/routes.csv
-
 # wandb secrets
 wandb/
+scripts/wandb/
 wandb_config.json
 
 # Local copy of leaderboard
 leaderboard_site/
 
-# external_tasks outputs
-external_tasks/.mplconfig/
-*.pt
-*.npy
-
 servers/
 todo.txt
-archive/
 
-# Local agent guidance (generated, not committed)
 AGENTS.md
 .agents/
 QA.md
+
+results/
+
+#results/
+# detector/
+# episodes/
+# SUMO_output/
+# agents.csv
+# det.add.xml
+# route.rou.xml
+# routes.csv
+# combined_data.csv
+
+# Keep sample_results fixtures tracked for tests.
+# !results/sample_results/
+# !results/sample_results/**
+# !results/sample_results/detector/
+# !results/sample_results/detector/**
+# !results/sample_results/episodes/
+# !results/sample_results/episodes/**
+# !results/sample_results/SUMO_output/
+# !results/sample_results/SUMO_output/**
+# !results/sample_results/agents.csv
+# !results/sample_results/det.add.xml
+# !results/sample_results/losses.csv
+# !results/sample_results/route.rou.xml
+# !results/sample_results/routes.csv
+
+*.pt
+*.npy

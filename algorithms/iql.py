@@ -19,7 +19,7 @@ Recurrent state (`reset_episode`)
 - Call `reset_episode()` once after every environment `reset()` (i.e., at the beginning of each episode/trajectory).
 - For OpenURB scripts (single-step per agent/day), this means calling `reset_episode()` once per day; the GRU is
   applied for a single step so it effectively behaves like a feedforward policy.
-- For multi-step tasks (e.g. `external_tasks/`), this means calling `reset_episode()` once per episode; the GRU then
+- For multi-step environments, this means calling `reset_episode()` once per episode; the GRU then
   carries information across steps within the episode.
 """
 
