@@ -1,12 +1,11 @@
-# PIMAC_v2 hyperparameters
+# PIMAC hyperparameters
 
 All configs in this folder share the same keys and are consumed by
-`scripts/open_pimac_v2.py` / `scripts/cond_open_pimac_v2.py` together with
-`algorithms/pimac_v2.py`.
+`scripts/open_pimac.py` / `scripts/cond_open_pimac.py` together with
+`algorithms/pimac.py`.
 
-Compared to `pimac_v1`, `pimac_v2` uses uncertainty-gated FiLM inside the actor
-policy path. FiLM gate parameters are learned internally, so no extra config
-keys are required beyond the list below.
+The retained OpenURB PIMAC variant keeps uncertainty-gated FiLM and adds a
+context-conditioned low-rank hypernetwork residual over the policy head.
 
 - `training_eps`: number of training episodes in the AV learning phase.
 - `batch_size`: number of episodes sampled per PPO update.
@@ -20,11 +19,15 @@ keys are required beyond the list below.
 - `set_encoder_hidden_sizes`: hidden-layer widths for the set encoder `phi`.
 - `num_tokens`: number of learnable coordination tokens extracted from the active set.
 - `critic_hidden_sizes`: hidden-layer widths for the set critic head `rho`.
-- `include_team_size_feature`: if `true`, concatenate active-agent ratio before `rho`.
+- `include_team_size_feature`: if `true`, concatenate active-agent count before `rho`.
 - `distill_weight`: weight of the student-context distillation term in total loss.
 - `teacher_ema_tau`: EMA interpolation factor for the target teacher (0 disables EMA).
 - `ctx_logvar_min`: lower clamp bound for student context log-variance.
 - `ctx_logvar_max`: upper clamp bound for student context log-variance.
+- `hypernet_rank`: low-rank width `r` used to form `dW = A(ctx) @ B(ctx)`.
+- `hypernet_hidden_sizes`: hidden widths for the hypernetwork MLP over `ctx_mu`.
+- `hypernet_delta_init_scale`: scale applied to generated hyper-deltas for stability.
+- `hypernet_l2_coef`: coefficient for L2 regularization of generated `dW`/`db`.
 - `clip_eps`: PPO ratio clipping range.
 - `gamma`: discount factor.
 - `gae_lambda`: GAE(lambda) parameter for advantage estimation.

@@ -28,10 +28,20 @@ __all__ = [
     "MAPPOActorRNN",
     "CentralizedValueCritic",
     "MAPPOBase",
-    "MAPPOAEC",
-    "MAPPOParallel",
     "MAPPO",
 ]
+
+
+def _sorted_agent_ids(agent_ids: Sequence[object]) -> list[object]:
+    """Return a stable ordering for mixed agent-id types."""
+
+    def sort_key(agent_id: object):
+        try:
+            return (0, int(agent_id))
+        except (TypeError, ValueError):
+            return (1, str(agent_id))
+
+    return sorted(agent_ids, key=sort_key)
 
 
 def _build_mlp(in_dim: int, hidden_sizes: Sequence[int], out_dim: int) -> nn.Sequential:
@@ -44,11 +54,6 @@ def _build_mlp(in_dim: int, hidden_sizes: Sequence[int], out_dim: int) -> nn.Seq
         current_dim = int(hidden_dim)
     layers.append(nn.Linear(current_dim, int(out_dim)))
     return nn.Sequential(*layers)
-
-
-def _sorted_agent_ids(keys) -> list:
-    """Return deterministic ordering for mixed-type agent-id dictionaries."""
-    return sorted(list(keys), key=lambda agent_identifier: str(agent_identifier))
 
 
 class MAPPOActorRNN(nn.Module):
@@ -194,7 +199,7 @@ class CentralizedValueCritic(nn.Module):
 
 class MAPPOBase(BaseLearningModel):
     """
-    Shared MAPPO core used by both AEC and parallel environment wrappers.
+    Shared MAPPO core used by the OpenURB AEC interface.
 
     Responsibilities:
     - Shared actor/critic construction.
@@ -384,7 +389,7 @@ class MAPPOBase(BaseLearningModel):
                     axis=0,
                 )
             else:
-                # Parallel terminal steps can report empty next-observation dictionaries.
+                # Terminal turns can report empty next-observation dictionaries.
                 next_observation_array = np.zeros((0, observation_array.shape[-1]), dtype=np.float32)
         else:
             next_observation_array = np.asarray(next_observations, dtype=np.float32)
@@ -924,7 +929,7 @@ class MAPPOBase(BaseLearningModel):
         self.critic.train()
 
 
-class MAPPOAEC(MAPPOBase):
+class MAPPO(MAPPOBase):
     """MAPPO wrapper for AEC/OpenURB-style environments."""
 
     def act(
@@ -1020,68 +1025,3 @@ class MAPPOAEC(MAPPOBase):
             agent_ids=self._aec_cycle["agent_ids"],
         )
         self._aec_cycle = None
-
-
-class MAPPOParallel(MAPPOBase):
-    """MAPPO wrapper for parallel multi-agent environments."""
-
-    def act(
-        self,
-        state: np.ndarray,
-        agent_index: Optional[object] = None,
-    ) -> int:
-        """Single-agent helper for parallel APIs; prefer `act_parallel`."""
-        if agent_index is None:
-            raise ValueError("MAPPOParallel.act requires agent_index. Prefer act_parallel for parallel environments.")
-        return self._act_single(state=state, actor_key=agent_index)
-
-    def act_parallel(self, obs_dict: dict) -> dict:
-        """Compute one action per currently present parallel-agent observation."""
-        actions_by_agent_id = {}
-        for agent_id in _sorted_agent_ids(obs_dict.keys()):
-            actions_by_agent_id[agent_id] = self._act_single(
-                state=obs_dict[agent_id],
-                actor_key=agent_id,
-            )
-        return actions_by_agent_id
-
-    @staticmethod
-    def _resolve_parallel_done(done_dict) -> bool:
-        """Normalize heterogeneous parallel done containers to one terminal boolean."""
-        if isinstance(done_dict, dict):
-            if "__all__" in done_dict:
-                return bool(done_dict.get("__all__", False))
-            if not done_dict:
-                return False
-            return all(bool(flag) for flag in done_dict.values())
-        return bool(done_dict)
-
-    def store_parallel_step(
-        self,
-        obs_dict: dict,
-        action_dict: dict,
-        reward_dict: dict,
-        next_obs_dict: dict,
-        done_dict,
-        active_mask_dict: Optional[dict] = None,
-        next_active_mask_dict: Optional[dict] = None,
-        global_state: Optional[np.ndarray] = None,
-        next_global_state: Optional[np.ndarray] = None,
-    ) -> None:
-        """Store one parallel-env joint transition."""
-        episode_done = self._resolve_parallel_done(done_dict)
-        self.store_transition(
-            observations=obs_dict,
-            actions=action_dict,
-            rewards=reward_dict,
-            active_mask=active_mask_dict,
-            global_state=global_state,
-            next_observations=next_obs_dict,
-            next_active_mask=next_active_mask_dict,
-            next_global_state=next_global_state,
-            done=episode_done,
-        )
-
-
-# Compatibility alias for call sites that expect `MAPPO` directly.
-MAPPO = MAPPOAEC

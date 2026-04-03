@@ -387,6 +387,7 @@ if __name__ == "__main__":
     ###############################
     pbar.set_description("Testing")
     for episode in range(test_eps):
+        global_episode = training_eps + dynamic_episodes + episode
         env.reset()
         for agent in env.agent_iter():
             observation, reward, termination, truncation, info = env.last()
@@ -395,6 +396,73 @@ if __name__ == "__main__":
             else:
                 action = mutated_humans[agent].act(0)
             env.step(action)
+        if (global_episode > training_eps) and (global_episode % switch_interval == 0):
+            shifted_humans, shifted_avs = list(), list()
+            
+            for human_id in human_agents_copy:
+                if human_id not in env.possible_agents:
+                    agent_to_copy = next((agent for agent in env.human_agents if str(agent.id) == human_id), None)
+                    assert agent_to_copy is not None, f"Human agent {human_id} not found in both possible agents and human agents."
+                    human_agents_copy[human_id] = copy.deepcopy(agent_to_copy)
+                    
+            for machine_id in machine_agents_copy:
+                if machine_id in env.possible_agents:
+                    agent_to_copy = next((agent for agent in env.machine_agents if str(agent.id) == machine_id), None)
+                    assert agent_to_copy is not None, f"AV agent {machine_id} found in possible agents but not in machine agents."
+                    machine_agents_copy[machine_id] = copy.deepcopy(agent_to_copy)
+            
+            known_machines = set(machine_agents_copy.keys())
+            
+            for human in env.human_agents[:]:
+                if random.random() <= switch_prob_humans:
+                    env.human_agents.remove(human)
+                    env.all_agents.remove(human)
+                    
+                    human_id = str(human.id)
+                    if human_id in known_machines:
+                        new_av = copy.deepcopy(machine_agents_copy[human_id])
+                    else:
+                        new_av = MachineAgent(human.id, human.start_time,
+                                            human.origin, human.destination,
+                                            env.agent_params[kc.MACHINE_PARAMETERS], env.action_space_size)
+                    
+                    if human_id not in mutated_humans:
+                        baseline_human = copy.deepcopy(human_agents_copy[human_id])
+                        initial_knowledge = free_flows[(human.origin, human.destination)]
+                        initial_knowledge = [-1 * item for item in initial_knowledge]
+                        baseline_human.model = get_baseline(human_learning_params, initial_knowledge)
+                        mutated_humans[human_id] = baseline_human
+                    
+                    new_av.model = mutated_humans[human_id].model
+                    env.machine_agents.append(new_av)
+                    machine_agents_copy[human_id] = copy.deepcopy(new_av)
+                    shifted_humans.append(human_id)
+                      
+            for machine in env.machine_agents[:]:
+                machine_id = str(machine.id)
+                if (machine_id not in shifted_humans) and (random.random() <= switch_prob_machines):
+                    env.machine_agents.remove(machine)
+                    env.all_agents.remove(machine)
+                    machine_agents_copy[machine_id] = copy.deepcopy(machine)
+                    
+                    new_human = copy.deepcopy(human_agents_copy[machine_id])
+                    env.human_agents.append(new_human)
+                    
+                    shifted_avs.append(machine_id)
+             
+            env.all_agents = env.machine_agents + env.human_agents       
+            env._initialize_machine_agents()
+            # Record switches
+            shifted_humans = " ".join(shifted_humans) if shifted_humans else "None"
+            shifted_avs = " ".join(shifted_avs) if shifted_avs else "None"
+            shifts_df.extend(
+                pl.DataFrame({
+                "episode": [global_episode], "shifted_humans": [shifted_humans],
+                "shifted_avs": [shifted_avs], "machine_ratio": [len(env.machine_agents) / len(env.all_agents)]
+                })
+            )
+            shifts_df.write_csv(shifts_path)
+            ##############################
         pbar.update()
         last_logged_episode = log_new_episodes(
             wb_run, episodes_folder, last_logged_episode, "testing", env

@@ -1,11 +1,9 @@
 """
-This script implements a simplified VDN algorithm for reinforcement learning in a traffic environment.
-The experiment involves dynamic switching between human and autonomous vehicle (AV) agents with
-switching probabilities conditioned on group travel times.
+Run the VDN benchmark in OpenURB with conditioned switching.
 
-VDN vs QMIX in this repo:
-- QMIX uses a learned mixing network conditioned on a centralized global state.
-- VDN uses a fixed additive mixing function (sum/mean over agents), so it does *not* require a global state.
+VDN and QMIX share the same recurrent per-agent Q-network structure.
+The difference is the mixing rule: QMIX learns a monotonic mixer, while VDN
+uses a fixed additive decomposition.
 """
 
 import os
@@ -51,7 +49,7 @@ def extract_action_mask(observation, info, action_space_size):
     action_mask = None
     obs = observation
     if isinstance(observation, dict):
-        # PettingZoo sometimes wraps observations as {"observation": ..., "action_mask": ...}.
+        # Some environment wrappers expose observations as {"observation": ..., "action_mask": ...}.
         action_mask = observation.get("action_mask")
         obs = observation.get("observation", observation.get("obs", observation))
 
@@ -466,6 +464,8 @@ if __name__ == "__main__":
 
     pbar.set_description("Testing")
     for episode in range(test_eps):
+        global_episode = training_eps + dynamic_episodes + episode
+        travel_times = list()
         env.reset()
         vdn.reset_episode()
         for agent_id in env.agent_iter():
@@ -476,6 +476,98 @@ if __name__ == "__main__":
             else:
                 action = vdn.act(obs, action_mask=action_mask, agent_index=agent_id_to_index[agent_id])
             env.step(action)
+            travel_times.extend(env.travel_times_list)
+        if global_episode > training_eps:
+            ep_av_tt = [entry["travel_time"] for entry in travel_times if entry.get("kind") == "AV"]
+            ep_human_tt = [entry["travel_time"] for entry in travel_times if entry.get("kind") == "Human"]
+            if ep_av_tt:
+                av_tts.append(np.mean(ep_av_tt))
+            if ep_human_tt:
+                human_tts.append(np.mean(ep_human_tt))
+
+        if (global_episode > training_eps) and (global_episode % switch_interval == 0):
+            shifted_humans, shifted_avs = list(), list()
+
+            for human_id in human_agents_copy:
+                if human_id not in env.possible_agents:
+                    agent_to_copy = next((agent for agent in env.human_agents if str(agent.id) == human_id), None)
+                    assert (
+                        agent_to_copy is not None
+                    ), f"Human agent {human_id} not found in both possible agents and human agents."
+                    human_agents_copy[human_id] = copy.deepcopy(agent_to_copy)
+
+            for machine_id in machine_agents_copy:
+                if machine_id in env.possible_agents:
+                    agent_to_copy = next((agent for agent in env.machine_agents if str(agent.id) == machine_id), None)
+                    assert (
+                        agent_to_copy is not None
+                    ), f"AV agent {machine_id} found in possible agents but not in machine agents."
+                    machine_agents_copy[machine_id] = copy.copy(agent_to_copy)
+                    machine_agents_copy[machine_id].model = vdn
+
+            known_machines = set(machine_agents_copy.keys())
+            tt_ratio = 1.0
+            if (len(human_tts) > 0) and (len(av_tts) > 0):
+                tt_ratio = float(np.mean(human_tts) / np.mean(av_tts))
+            tt_ratio_denom = max(tt_ratio, 1e-6)
+            cond_switch_prob_humans = min(1.0, max(0.0, switch_prob_humans * float(tt_ratio)))
+            cond_switch_prob_machines = min(1.0, max(0.0, switch_prob_machines / float(tt_ratio_denom)))
+
+            for human in env.human_agents[:]:
+                if random.random() <= cond_switch_prob_humans:
+                    env.human_agents.remove(human)
+                    env.all_agents.remove(human)
+
+                    human_id = str(human.id)
+                    if human_id in known_machines:
+                        new_av = copy.copy(machine_agents_copy[human_id])
+                        new_av.model = vdn
+                    else:
+                        new_av = MachineAgent(
+                            human.id,
+                            human.start_time,
+                            human.origin,
+                            human.destination,
+                            env.agent_params[kc.MACHINE_PARAMETERS],
+                            env.action_space_size,
+                        )
+                        new_av.model = vdn
+
+                    env.machine_agents.append(new_av)
+                    shifted_humans.append(str(human.id))
+
+            for machine in env.machine_agents[:]:
+                if (str(machine.id) not in shifted_humans) and (random.random() <= cond_switch_prob_machines):
+                    env.machine_agents.remove(machine)
+                    env.all_agents.remove(machine)
+
+                    new_human = copy.deepcopy(human_agents_copy[str(machine.id)])
+                    env.human_agents.append(new_human)
+
+                    shifted_avs.append(str(machine.id))
+
+            env.all_agents = env.machine_agents + env.human_agents
+            env._initialize_machine_agents()
+
+            # Reset the travel-time windows after the team composition changes.
+            human_tts = list()
+            av_tts = list()
+
+            shifted_humans = " ".join(shifted_humans) if shifted_humans else "None"
+            shifted_avs = " ".join(shifted_avs) if shifted_avs else "None"
+            shifts_df.extend(
+                pl.DataFrame(
+                    {
+                        "episode": [global_episode],
+                        "shifted_humans": [shifted_humans],
+                        "shifted_avs": [shifted_avs],
+                        "machine_ratio": [len(env.machine_agents) / len(env.all_agents)],
+                        "tt_ratio": [tt_ratio],
+                    }
+                )
+            )
+            shifts_df.write_csv(shifts_path)
+
         pbar.update()
         last_logged_episode = log_new_episodes(wb_run, episodes_folder, last_logged_episode, "testing", env)
 

@@ -1,11 +1,9 @@
 """
-This script implements a simplified VDN algorithm for reinforcement learning in a traffic environment.
-The experiment involves dynamic switching between human and autonomous vehicle (AV) agents with predefined transition probabilities.
+Run the VDN benchmark in OpenURB with the open switching schedule from the task config.
 
-VDN vs QMIX in this repo:
-- Both use recurrent per-agent Q-networks (MLP + GRU) and DQN-style TD learning.
-- QMIX uses a learned mixing network that conditions on a centralized global state.
-- VDN uses a fixed additive mixing function (sum/mean over agents), so it does *not* require a global state.
+VDN and QMIX share the same recurrent per-agent Q-network structure.
+The difference is the mixing rule: QMIX learns a monotonic mixer, while VDN
+uses a fixed additive decomposition.
 """
 
 import os
@@ -51,7 +49,7 @@ def extract_action_mask(observation, info, action_space_size):
     action_mask = None
     obs = observation
     if isinstance(observation, dict):
-        # PettingZoo sometimes wraps observations as {"observation": ..., "action_mask": ...}.
+        # Some environment wrappers expose observations as {"observation": ..., "action_mask": ...}.
         action_mask = observation.get("action_mask")
         obs = observation.get("observation", observation.get("obs", observation))
 
@@ -361,7 +359,7 @@ if __name__ == "__main__":
 
             if termination or truncation:
                 # AEC: rewards are assigned when the day finishes. During the terminal
-                # "dead steps", PettingZoo yields each agent again so we can read its reward.
+                # Some AEC environments yield terminal turns so reward bookkeeping can complete cleanly.
                 idx = agent_id_to_index[agent_id]
                 rewards_batch[idx] = float(reward)
                 action = None
@@ -476,6 +474,7 @@ if __name__ == "__main__":
 
     pbar.set_description("Testing")
     for episode in range(test_eps):
+        global_episode = training_eps + dynamic_episodes + episode
         env.reset()
         vdn.reset_episode()
         for agent_id in env.agent_iter():
@@ -487,6 +486,84 @@ if __name__ == "__main__":
                 # Action masking is still applied during evaluation.
                 action = vdn.act(obs, action_mask=action_mask, agent_index=agent_id_to_index[agent_id])
             env.step(action)
+        if (global_episode > training_eps) and (global_episode % switch_interval == 0):
+            shifted_humans, shifted_avs = list(), list()
+
+            for human_id in human_agents_copy:
+                if human_id not in env.possible_agents:
+                    # Refresh cached human states for agents that learned as humans.
+                    agent_to_copy = next((agent for agent in env.human_agents if str(agent.id) == human_id), None)
+                    assert (
+                        agent_to_copy is not None
+                    ), f"Human agent {human_id} not found in both possible agents and human agents."
+                    human_agents_copy[human_id] = copy.deepcopy(agent_to_copy)
+
+            for machine_id in machine_agents_copy:
+                if machine_id in env.possible_agents:
+                    # Refresh cached AV states for agents that learned as machines.
+                    agent_to_copy = next((agent for agent in env.machine_agents if str(agent.id) == machine_id), None)
+                    assert (
+                        agent_to_copy is not None
+                    ), f"AV agent {machine_id} found in possible agents but not in machine agents."
+                    machine_agents_copy[machine_id] = copy.copy(agent_to_copy)
+                    machine_agents_copy[machine_id].model = vdn
+
+            known_machines = set(machine_agents_copy.keys())
+
+            for human in env.human_agents[:]:
+                if random.random() <= switch_prob_humans:
+                    # Convert a human to an AV (reuse prior AV state if available).
+                    env.human_agents.remove(human)
+                    env.all_agents.remove(human)
+
+                    human_id = str(human.id)
+                    if human_id in known_machines:
+                        new_av = copy.copy(machine_agents_copy[human_id])
+                        new_av.model = vdn
+                    else:
+                        new_av = MachineAgent(
+                            human.id,
+                            human.start_time,
+                            human.origin,
+                            human.destination,
+                            env.agent_params[kc.MACHINE_PARAMETERS],
+                            env.action_space_size,
+                        )
+                        new_av.model = vdn
+
+                    env.machine_agents.append(new_av)
+                    shifted_humans.append(str(human.id))
+
+            for machine in env.machine_agents[:]:
+                if (str(machine.id) not in shifted_humans) and (random.random() <= switch_prob_machines):
+                    # Convert an AV back to a human and remove from the AV pool.
+                    env.machine_agents.remove(machine)
+                    env.all_agents.remove(machine)
+
+                    new_human = copy.deepcopy(human_agents_copy[str(machine.id)])
+                    env.human_agents.append(new_human)
+
+                    shifted_avs.append(str(machine.id))
+
+            # Rebuild internal env bookkeeping after group changes.
+            env.all_agents = env.machine_agents + env.human_agents
+            env._initialize_machine_agents()
+
+            # Record switches
+            shifted_humans = " ".join(shifted_humans) if shifted_humans else "None"
+            shifted_avs = " ".join(shifted_avs) if shifted_avs else "None"
+            shifts_df.extend(
+                pl.DataFrame(
+                    {
+                        "episode": [global_episode],
+                        "shifted_humans": [shifted_humans],
+                        "shifted_avs": [shifted_avs],
+                        "machine_ratio": [len(env.machine_agents) / len(env.all_agents)],
+                    }
+                )
+            )
+            shifts_df.write_csv(shifts_path)
+
         pbar.update()
         last_logged_episode = log_new_episodes(wb_run, episodes_folder, last_logged_episode, "testing", env)
 

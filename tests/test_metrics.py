@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import json
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -71,3 +72,40 @@ def test_load_general_and_detailed_sumo_from_sample_results():
 
     assert not detailed_df.empty
     assert not general_df.empty
+
+
+def test_process_experiment_forwards_effective_human_learning_episodes(tmp_path, monkeypatch):
+    """Pretrained-human runs must forward effective human-learning episodes to metrics extraction."""
+    exp_dir = tmp_path / "exp"
+    metrics_dir = exp_dir / "metrics"
+    metrics_dir.mkdir(parents=True)
+
+    exp_config = {
+        "human_learning_episodes": 80,
+        "effective_human_learning_episodes": 0,
+        "training_eps": 240,
+        "dynamic_episodes": 240,
+        "test_eps": 25,
+    }
+    (exp_dir / "exp_config.json").write_text(json.dumps(exp_config), encoding="utf-8")
+    (metrics_dir / "combined_data.csv").write_text("episode\n1\n", encoding="utf-8")
+
+    captured: dict = {}
+
+    def fake_extract_metrics(path, config, verbose=False, shifts_path=None):
+        captured["path"] = path
+        captured["config"] = dict(config)
+        return pd.DataFrame([{"t_CAV": 1.0}]), pd.DataFrame()
+
+    monkeypatch.setattr(metrics, "extract_metrics", fake_extract_metrics)
+
+    status = metrics.process_experiment(
+        exp_id="exp",
+        data_path=str(exp_dir),
+        skip_collecting=True,
+        no_skip=True,
+        verbose=False,
+    )
+
+    assert status == "success"
+    assert captured["config"]["effective_human_learning_episodes"] == 0

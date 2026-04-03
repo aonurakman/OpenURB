@@ -12,9 +12,7 @@ import torch
 from algorithms.mappo import (
     CentralizedValueCritic,
     MAPPO,
-    MAPPOAEC,
     MAPPOActorRNN,
-    MAPPOParallel,
 )
 
 
@@ -52,7 +50,7 @@ def test_act_uses_argmax_when_deterministic():
     np.random.seed(0)
     torch.manual_seed(0)
 
-    mappo = MAPPOAEC(
+    mappo = MAPPO(
         state_size=3,
         action_space_size=4,
         num_agents=1,
@@ -85,7 +83,7 @@ def test_act_uses_argmax_when_deterministic():
 
 
 def test_gae_matches_manual_recursion():
-    mappo = MAPPOAEC(state_size=2, action_space_size=2, num_agents=2, gamma=0.9, gae_lambda=0.8)
+    mappo = MAPPO(state_size=2, action_space_size=2, num_agents=2, gamma=0.9, gae_lambda=0.8)
 
     rewards = np.array([1.0, 2.0], dtype=np.float32)
     values = np.array([0.5, 0.2], dtype=np.float32)
@@ -110,7 +108,7 @@ def test_store_episode_finalization_contains_ppo_fields():
     np.random.seed(1)
     torch.manual_seed(1)
 
-    mappo = MAPPOAEC(state_size=4, action_space_size=3, num_agents=3, buffer_size=8, batch_size=1)
+    mappo = MAPPO(state_size=4, action_space_size=3, num_agents=3, buffer_size=8, batch_size=1)
 
     obs = np.random.randn(3, 4).astype(np.float32)
     actions = np.array([0, 1, 2], dtype=np.int64)
@@ -130,7 +128,7 @@ def test_learn_updates_parameters_and_logs_metrics():
     np.random.seed(2)
     torch.manual_seed(2)
 
-    mappo = MAPPOAEC(
+    mappo = MAPPO(
         state_size=3,
         action_space_size=2,
         num_agents=2,
@@ -186,7 +184,7 @@ def test_variable_n_batching_smoke():
     np.random.seed(3)
     torch.manual_seed(3)
 
-    mappo = MAPPOAEC(
+    mappo = MAPPO(
         state_size=4,
         action_space_size=3,
         num_agents=7,
@@ -218,22 +216,11 @@ def test_variable_n_batching_smoke():
     assert len(mappo.memory) == 0
 
 
-def test_parallel_api_smoke():
-    np.random.seed(4)
-    torch.manual_seed(4)
-
-    mappo = MAPPOParallel(state_size=3, action_space_size=4, num_agents=5)
-    obs_dict = {f"agent_{i}": np.random.randn(3).astype(np.float32) for i in range(5)}
-    action_dict = mappo.act_parallel(obs_dict)
-
-    assert set(action_dict.keys()) == set(obs_dict.keys())
-
-
 def test_aec_cycle_storage_smoke():
     np.random.seed(5)
     torch.manual_seed(5)
 
-    mappo = MAPPOAEC(state_size=3, action_space_size=4, num_agents=3, buffer_size=8, batch_size=1)
+    mappo = MAPPO(state_size=3, action_space_size=4, num_agents=3, buffer_size=8, batch_size=1)
     agent_ids = ["a", "b", "c"]
     mappo.aec_begin_cycle(agent_ids)
 
@@ -244,76 +231,3 @@ def test_aec_cycle_storage_smoke():
     mappo.aec_end_cycle(done_all=True)
     assert len(mappo.memory) == 1
 
-
-def test_mappo_alias_points_to_aec():
-    mappo = MAPPO(state_size=2, action_space_size=2, num_agents=2)
-    assert isinstance(mappo, MAPPOAEC)
-
-
-def test_parallel_done_dict_without_all_key_finalizes_only_when_all_true():
-    np.random.seed(6)
-    torch.manual_seed(6)
-
-    mappo = MAPPOParallel(state_size=3, action_space_size=2, num_agents=2, buffer_size=8, batch_size=1)
-    obs = {
-        "a": np.random.randn(3).astype(np.float32),
-        "b": np.random.randn(3).astype(np.float32),
-    }
-    actions = {"a": 0, "b": 1}
-    rewards = {"a": 0.5, "b": -0.25}
-    next_obs = {
-        "a": np.random.randn(3).astype(np.float32),
-        "b": np.random.randn(3).astype(np.float32),
-    }
-
-    mappo.store_parallel_step(obs, actions, rewards, next_obs, done_dict={"a": False, "b": True})
-    assert len(mappo.memory) == 0
-
-    mappo.store_parallel_step(obs, actions, rewards, next_obs, done_dict={"a": True, "b": True})
-    assert len(mappo.memory) == 1
-
-    mappo_2 = MAPPOParallel(state_size=3, action_space_size=2, num_agents=2, buffer_size=8, batch_size=1)
-    mappo_2.store_parallel_step(obs, actions, rewards, next_obs, done_dict={"__all__": True, "a": False, "b": False})
-    assert len(mappo_2.memory) == 1
-
-
-def test_parallel_terminal_empty_next_obs_dict_finalizes_without_crash():
-    np.random.seed(8)
-    torch.manual_seed(8)
-
-    mappo = MAPPOParallel(state_size=3, action_space_size=2, num_agents=2, buffer_size=8, batch_size=1)
-    obs = {
-        "a": np.random.randn(3).astype(np.float32),
-        "b": np.random.randn(3).astype(np.float32),
-    }
-    actions = {"a": 0, "b": 1}
-    rewards = {"a": 0.5, "b": -0.25}
-
-    mappo.store_parallel_step(obs, actions, rewards, next_obs_dict={}, done_dict={"__all__": True})
-
-    assert len(mappo.memory) == 1
-    ep = mappo.memory[0]
-    assert ep["next_active_mask"].shape == (1, 2)
-    np.testing.assert_array_equal(ep["next_active_mask"][0], np.zeros(2, dtype=np.float32))
-
-
-def test_parallel_act_accepts_non_integer_agent_ids():
-    np.random.seed(7)
-    torch.manual_seed(7)
-
-    mappo = MAPPOParallel(state_size=4, action_space_size=3, num_agents=2)
-    obs_step1 = {
-        "agent_alpha": np.random.randn(4).astype(np.float32),
-        "agent_beta": np.random.randn(4).astype(np.float32),
-    }
-    actions_step1 = mappo.act_parallel(obs_step1)
-    assert set(actions_step1.keys()) == set(obs_step1.keys())
-
-    obs_step2 = {
-        "agent_beta": np.random.randn(4).astype(np.float32),
-        "agent_alpha": np.random.randn(4).astype(np.float32),
-    }
-    actions_step2 = mappo.act_parallel(obs_step2)
-    assert set(actions_step2.keys()) == set(obs_step2.keys())
-    action_single = mappo.act(np.random.randn(4).astype(np.float32), agent_index=("tuple", 1))
-    assert isinstance(action_single, int)

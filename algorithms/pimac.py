@@ -1,15 +1,15 @@
 """
-PIMACV1 implementation for OpenURB.
+PIMAC implementation for OpenURB.
 
-PIMACV1 extends the `pimac_v0` MAPPO-style baseline with teacher-student
-cooperation context learning:
+This retained OpenURB variant uses:
 - A token-based set teacher produces per-agent cooperation context through
   masked cross-attention.
 - The centralized critic consumes teacher tokens for team-value estimation.
 - The decentralized actor predicts student context (`mu`, `logvar`) from local
-  recurrent features and conditions policy logits with concatenated `mu`.
-- Student context is trained by heteroscedastic distillation against the
-  teacher context, while PPO remains on-policy and student-conditioned.
+  recurrent features, modulates policy features with FiLM, and applies a gated
+  low-rank residual hypernetwork over the policy head parameters.
+- Student context is trained by heteroscedastic distillation against teacher
+  context, while PPO remains on-policy.
 
 This keeps canonical MAPPO optimization semantics (PPO clip + GAE + entropy),
 while adding centralized context supervision that is not available at inference.
@@ -31,14 +31,24 @@ import torch.optim as optim
 from baseline_models import BaseLearningModel
 
 __all__ = [
-    "PIMACV1ActorRNN",
+    "PIMACActorRNN",
     "SetTokenTeacher",
     "SetValueCritic",
-    "PIMACV1Base",
-    "PIMACV1AEC",
-    "PIMACV1Parallel",
-    "PIMACV1",
+    "PIMACBase",
+    "PIMAC",
 ]
+
+
+def _sorted_agent_ids(agent_ids: Sequence[object]) -> list[object]:
+    """Return a stable ordering for mixed agent-id types."""
+
+    def sort_key(agent_id: object):
+        try:
+            return (0, int(agent_id))
+        except (TypeError, ValueError):
+            return (1, str(agent_id))
+
+    return sorted(agent_ids, key=sort_key)
 
 
 def _build_mlp(in_dim: int, hidden_sizes: Sequence[int], out_dim: int) -> nn.Sequential:
@@ -53,12 +63,7 @@ def _build_mlp(in_dim: int, hidden_sizes: Sequence[int], out_dim: int) -> nn.Seq
     return nn.Sequential(*layers)
 
 
-def _sorted_agent_ids(keys) -> list:
-    """Return deterministic ordering for mixed-type agent-id dictionaries."""
-    return sorted(list(keys), key=lambda agent_identifier: str(agent_identifier))
-
-
-class PIMACV1ActorRNN(nn.Module):
+class PIMACActorRNN(nn.Module):
     """
     Shared recurrent actor with student context heads.
 
@@ -66,8 +71,11 @@ class PIMACV1ActorRNN(nn.Module):
     - action logits,
     - context mean (`ctx_mu`) and log-variance (`ctx_logvar`) for distillation.
 
-    Policy conditioning follows the v1 design decision: concatenate the student
-    context mean with recurrent features before the policy head.
+    Policy conditioning follows uncertainty-gated FiLM + hypernetwork residuals:
+    - FiLM scale/shift are predicted from student context mean.
+    - A scalar gate from student uncertainty scales FiLM strength.
+    - A low-rank hypernetwork predicts residual policy-head deltas from context.
+    - The same uncertainty gate scales the hypernetwork parameter deltas.
     """
 
     def __init__(
@@ -78,11 +86,16 @@ class PIMACV1ActorRNN(nn.Module):
         widths: Sequence[int],
         rnn_hidden_dim: int,
         ctx_dim: int,
+        hypernet_rank: int = 4,
+        hypernet_hidden_sizes: Sequence[int] = (128, 128),
+        hypernet_delta_init_scale: float = 0.05,
         ctx_logvar_min: float = -6.0,
         ctx_logvar_max: float = 4.0,
     ):
         super().__init__()
-        assert len(widths) == (int(num_hidden) + 1), "PIMACV1 actor widths and layer count mismatch."
+        assert len(widths) == (int(num_hidden) + 1), "PIMAC actor widths and layer count mismatch."
+        if int(hypernet_rank) <= 0:
+            raise ValueError("PIMAC hypernet_rank must be a positive integer.")
 
         self.input_layer = nn.Linear(int(obs_dim), int(widths[0]))
         self.hidden_layers = nn.ModuleList(
@@ -91,9 +104,28 @@ class PIMACV1ActorRNN(nn.Module):
         )
         self.rnn = nn.GRU(input_size=int(widths[-1]), hidden_size=int(rnn_hidden_dim), batch_first=True)
 
-        self.ctx_mu_head = nn.Linear(int(rnn_hidden_dim), int(ctx_dim))
-        self.ctx_logvar_head = nn.Linear(int(rnn_hidden_dim), int(ctx_dim))
-        self.policy_head = nn.Linear(int(rnn_hidden_dim) + int(ctx_dim), int(action_dim))
+        self.hidden_dim = int(rnn_hidden_dim)
+        self.action_dim = int(action_dim)
+        self.hypernet_rank = int(hypernet_rank)
+        self.hypernet_delta_init_scale = float(hypernet_delta_init_scale)
+
+        self.ctx_mu_head = nn.Linear(self.hidden_dim, int(ctx_dim))
+        self.ctx_logvar_head = nn.Linear(self.hidden_dim, int(ctx_dim))
+        self.film_head = nn.Linear(int(ctx_dim), 2 * self.hidden_dim)
+        self.gate_weight = nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
+        self.gate_bias = nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
+        # Learned base policy head; hypernetwork generates a context-conditioned residual.
+        self.policy_head = nn.Linear(self.hidden_dim, self.action_dim)
+        low_rank_weight_width = self.hidden_dim * self.hypernet_rank
+        low_rank_action_width = self.hypernet_rank * self.action_dim
+        self._hypernet_weight_out = low_rank_weight_width
+        self._hypernet_action_out = low_rank_action_width
+        hypernet_output_dim = low_rank_weight_width + low_rank_action_width + self.action_dim
+        self.hypernet_delta_head = _build_mlp(
+            in_dim=int(ctx_dim),
+            hidden_sizes=tuple(hypernet_hidden_sizes),
+            out_dim=hypernet_output_dim,
+        )
 
         self.ctx_logvar_min = float(ctx_logvar_min)
         self.ctx_logvar_max = float(ctx_logvar_max)
@@ -123,6 +155,11 @@ class PIMACV1ActorRNN(nn.Module):
             aux (optional):
                 - ctx_mu: [B, T, ctx_dim]
                 - ctx_logvar: [B, T, ctx_dim]
+                - gate: [B, T, 1]
+                - delta_w_l2: [B, T]
+                - delta_b_l2: [B, T]
+                - delta_w_norm: [B, T]
+                - delta_b_norm: [B, T]
         """
         batch_size, num_timesteps, observation_dim = obs_seq.shape
         encoded_sequence = self._encode(obs_seq.reshape(batch_size * num_timesteps, observation_dim)).reshape(
@@ -139,15 +176,53 @@ class PIMACV1ActorRNN(nn.Module):
             max=self.ctx_logvar_max,
         )
 
-        # v1 policy conditioning: concat recurrent feature with student context mean.
-        policy_input = torch.cat([recurrent_features, context_mean], dim=-1)
-        action_logits = self.policy_head(policy_input)
+        # FiLM parameters are predicted from student context mean.
+        film_parameters = self.film_head(context_mean)
+        film_scale, film_shift = torch.chunk(film_parameters, 2, dim=-1)
+
+        # Higher uncertainty (larger log-variance) reduces modulation strength.
+        mean_log_variance = context_log_variance.mean(dim=-1, keepdim=True)
+        modulation_gate = torch.sigmoid(self.gate_weight * (-mean_log_variance) + self.gate_bias)
+
+        # Uncertainty-gated FiLM modulation over recurrent policy features.
+        modulated_recurrent_features = (
+            recurrent_features * (1.0 + modulation_gate * film_scale)
+            + modulation_gate * film_shift
+        )
+
+        # Hypernetwork predicts low-rank policy-head residual factors from context.
+        hypernet_deltas = self.hypernet_delta_head(context_mean) * self.hypernet_delta_init_scale
+        weight_factor_flat = hypernet_deltas[..., : self._hypernet_weight_out]
+        action_factor_flat = hypernet_deltas[..., self._hypernet_weight_out : self._hypernet_weight_out + self._hypernet_action_out]
+        delta_bias = hypernet_deltas[..., self._hypernet_weight_out + self._hypernet_action_out :]
+
+        weight_factor = weight_factor_flat.reshape(batch_size, num_timesteps, self.hidden_dim, self.hypernet_rank)
+        action_factor = action_factor_flat.reshape(batch_size, num_timesteps, self.hypernet_rank, self.action_dim)
+        delta_weight = torch.einsum("bthr,btra->btha", weight_factor, action_factor)
+
+        gate_for_params = modulation_gate.unsqueeze(-1)
+        base_weight = self.policy_head.weight.t().contiguous().view(1, 1, self.hidden_dim, self.action_dim)
+        base_bias = self.policy_head.bias.view(1, 1, self.action_dim)
+        effective_weight = base_weight + gate_for_params * delta_weight
+        effective_bias = base_bias + modulation_gate * delta_bias
+
+        action_logits = torch.einsum("bth,btha->bta", modulated_recurrent_features, effective_weight) + effective_bias
+
+        delta_w_l2 = delta_weight.pow(2).sum(dim=(-1, -2))
+        delta_b_l2 = delta_bias.pow(2).sum(dim=-1)
+        delta_w_norm = torch.sqrt(delta_w_l2 + 1e-12)
+        delta_b_norm = torch.sqrt(delta_b_l2 + 1e-12)
 
         if not return_aux:
             return action_logits, next_hidden_state
         return action_logits, next_hidden_state, {
             "ctx_mu": context_mean,
             "ctx_logvar": context_log_variance,
+            "gate": modulation_gate,
+            "delta_w_l2": delta_w_l2,
+            "delta_b_l2": delta_b_l2,
+            "delta_w_norm": delta_w_norm,
+            "delta_b_norm": delta_b_norm,
         }
 
 
@@ -329,9 +404,9 @@ class SetValueCritic(nn.Module):
         return team_values, tokens, ctx_teacher
 
 
-class PIMACV1Base(BaseLearningModel):
+class PIMACBase(BaseLearningModel):
     """
-    Shared PIMACV1 core used by both AEC and parallel wrappers.
+    Shared PIMAC core used by the OpenURB AEC interface.
 
     Core responsibilities:
     - shared actor/critic construction,
@@ -368,6 +443,10 @@ class PIMACV1Base(BaseLearningModel):
         num_tokens: int = 4,
         distill_weight: float = 0.1,
         teacher_ema_tau: float = 0.01,
+        hypernet_rank: int = 4,
+        hypernet_hidden_sizes: Sequence[int] = (128, 128),
+        hypernet_delta_init_scale: float = 0.05,
+        hypernet_l2_coef: float = 1e-4,
         ctx_logvar_min: float = -6.0,
         ctx_logvar_max: float = 4.0,
         deterministic: bool = False,
@@ -394,16 +473,23 @@ class PIMACV1Base(BaseLearningModel):
         self.num_tokens = int(num_tokens)
         self.distill_weight = float(distill_weight)
         self.teacher_ema_tau = float(max(0.0, min(1.0, teacher_ema_tau)))
+        self.hypernet_rank = int(hypernet_rank)
+        self.hypernet_hidden_sizes = tuple(hypernet_hidden_sizes)
+        self.hypernet_delta_init_scale = float(hypernet_delta_init_scale)
+        self.hypernet_l2_coef = float(hypernet_l2_coef)
 
         self.deterministic = bool(deterministic)
 
-        self.actor_net = PIMACV1ActorRNN(
+        self.actor_net = PIMACActorRNN(
             obs_dim=self.obs_size,
             action_dim=self.action_space_size,
             num_hidden=int(num_hidden),
             widths=tuple(widths),
             rnn_hidden_dim=int(rnn_hidden_dim),
             ctx_dim=self.set_embed_dim,
+            hypernet_rank=self.hypernet_rank,
+            hypernet_hidden_sizes=self.hypernet_hidden_sizes,
+            hypernet_delta_init_scale=self.hypernet_delta_init_scale,
             ctx_logvar_min=float(ctx_logvar_min),
             ctx_logvar_max=float(ctx_logvar_max),
         ).to(self.device)
@@ -625,6 +711,11 @@ class PIMACV1Base(BaseLearningModel):
             aux (optional):
                 - ctx_mu: [B, T, N, D]
                 - ctx_logvar: [B, T, N, D]
+                - gate: [B, T, N, 1]
+                - delta_w_l2: [B, T, N]
+                - delta_b_l2: [B, T, N]
+                - delta_w_norm: [B, T, N]
+                - delta_b_norm: [B, T, N]
         """
         batch_size, num_timesteps, num_agents, observation_dim = obs.shape
         flattened_agent_sequences = obs.permute(0, 2, 1, 3).reshape(
@@ -639,6 +730,11 @@ class PIMACV1Base(BaseLearningModel):
             aux = {
                 "ctx_mu": flattened_aux["ctx_mu"].reshape(batch_size, num_agents, num_timesteps, -1).permute(0, 2, 1, 3),
                 "ctx_logvar": flattened_aux["ctx_logvar"].reshape(batch_size, num_agents, num_timesteps, -1).permute(0, 2, 1, 3),
+                "gate": flattened_aux["gate"].reshape(batch_size, num_agents, num_timesteps, -1).permute(0, 2, 1, 3),
+                "delta_w_l2": flattened_aux["delta_w_l2"].reshape(batch_size, num_agents, num_timesteps).permute(0, 2, 1),
+                "delta_b_l2": flattened_aux["delta_b_l2"].reshape(batch_size, num_agents, num_timesteps).permute(0, 2, 1),
+                "delta_w_norm": flattened_aux["delta_w_norm"].reshape(batch_size, num_agents, num_timesteps).permute(0, 2, 1),
+                "delta_b_norm": flattened_aux["delta_b_norm"].reshape(batch_size, num_agents, num_timesteps).permute(0, 2, 1),
             }
             return action_logits, aux
 
@@ -935,6 +1031,9 @@ class PIMACV1Base(BaseLearningModel):
         ratio: torch.Tensor,
         decision_denom: torch.Tensor,
         ctx_logvar: torch.Tensor,
+        gate: torch.Tensor,
+        delta_w_norm: torch.Tensor,
+        delta_b_norm: torch.Tensor,
         tokens: torch.Tensor,
         teacher_context: torch.Tensor,
     ) -> dict[str, torch.Tensor | float]:
@@ -977,6 +1076,26 @@ class PIMACV1Base(BaseLearningModel):
                 ctx_logvar_mean = torch.tensor(0.0, device=self.device)
                 ctx_logvar_std = torch.tensor(0.0, device=self.device)
 
+            selected_gate_values = gate[combined_mask.bool()]
+            if selected_gate_values.numel() > 0:
+                gate_mean = selected_gate_values.mean()
+                gate_std = selected_gate_values.std(unbiased=False)
+            else:
+                gate_mean = torch.tensor(0.0, device=self.device)
+                gate_std = torch.tensor(0.0, device=self.device)
+
+            selected_delta_w_norm = delta_w_norm[combined_mask.bool()]
+            if selected_delta_w_norm.numel() > 0:
+                delta_w_norm_mean = selected_delta_w_norm.mean()
+            else:
+                delta_w_norm_mean = torch.tensor(0.0, device=self.device)
+
+            selected_delta_b_norm = delta_b_norm[combined_mask.bool()]
+            if selected_delta_b_norm.numel() > 0:
+                delta_b_norm_mean = selected_delta_b_norm.mean()
+            else:
+                delta_b_norm_mean = torch.tensor(0.0, device=self.device)
+
         return {
             "approx_kl": approx_kl,
             "clip_frac": clip_fraction,
@@ -987,11 +1106,15 @@ class PIMACV1Base(BaseLearningModel):
             "teacher_ctx_norm_mean": teacher_ctx_norm_mean,
             "ctx_logvar_mean": ctx_logvar_mean,
             "ctx_logvar_std": ctx_logvar_std,
+            "gate_mean": gate_mean,
+            "gate_std": gate_std,
+            "delta_w_norm_mean": delta_w_norm_mean,
+            "delta_b_norm_mean": delta_b_norm_mean,
         }
 
     def learn(self) -> None:
         """
-        Run one PIMACV1 update phase.
+        Run one PIMAC update phase.
 
         Each epoch samples on-policy episodes, computes PPO + value + distillation
         losses, applies one optimizer step, logs diagnostics, and updates EMA teacher.
@@ -1039,6 +1162,11 @@ class PIMACV1Base(BaseLearningModel):
 
             student_context_mean = actor_aux["ctx_mu"]
             student_context_log_variance = actor_aux["ctx_logvar"]
+            uncertainty_gate = actor_aux["gate"].squeeze(-1)
+            delta_weight_l2 = actor_aux["delta_w_l2"]
+            delta_bias_l2 = actor_aux["delta_b_l2"]
+            delta_weight_norm = actor_aux["delta_w_norm"]
+            delta_bias_norm = actor_aux["delta_b_norm"]
 
             distillation_nll = (
                 0.5 * torch.exp(-student_context_log_variance) * ((student_context_mean - target_teacher_context) ** 2)
@@ -1047,12 +1175,14 @@ class PIMACV1Base(BaseLearningModel):
             distillation_loss = (distillation_nll.sum(dim=-1) * combined_mask).sum() / decision_denom
 
             distillation_mse = (((student_context_mean - target_teacher_context) ** 2).mean(dim=-1) * combined_mask).sum() / decision_denom
+            hypernet_l2 = ((delta_weight_l2 + delta_bias_l2) * combined_mask).sum() / decision_denom
 
             total_loss = (
                 policy_loss
                 + self.value_coef * value_loss
                 - self.entropy_coef * entropy_bonus
                 + self.distill_weight * distillation_loss
+                + self.hypernet_l2_coef * hypernet_l2
             )
 
             self.optimizer.zero_grad()
@@ -1076,6 +1206,9 @@ class PIMACV1Base(BaseLearningModel):
                 ratio=importance_ratio,
                 decision_denom=decision_denom,
                 ctx_logvar=student_context_log_variance,
+                gate=uncertainty_gate,
+                delta_w_norm=delta_weight_norm,
+                delta_b_norm=delta_bias_norm,
                 tokens=tokens,
                 teacher_context=teacher_context,
             )
@@ -1092,8 +1225,13 @@ class PIMACV1Base(BaseLearningModel):
                 "explained_variance": float(diagnostics["explained_variance"].detach().item()),
                 "distill_loss": float(distillation_loss.detach().item()),
                 "distill_mse": float(distillation_mse.detach().item()),
+                "hyper_l2": float(hypernet_l2.detach().item()),
                 "ctx_logvar_mean": float(diagnostics["ctx_logvar_mean"].detach().item()),
                 "ctx_logvar_std": float(diagnostics["ctx_logvar_std"].detach().item()),
+                "gate_mean": float(diagnostics["gate_mean"].detach().item()),
+                "gate_std": float(diagnostics["gate_std"].detach().item()),
+                "delta_w_norm_mean": float(diagnostics["delta_w_norm_mean"].detach().item()),
+                "delta_b_norm_mean": float(diagnostics["delta_b_norm_mean"].detach().item()),
                 "token_norm_mean": float(diagnostics["token_norm_mean"].detach().item()),
                 "teacher_ctx_norm_mean": float(diagnostics["teacher_ctx_norm_mean"].detach().item()),
                 "active_decisions": float(diagnostics["active_decisions"]),
@@ -1120,8 +1258,8 @@ class PIMACV1Base(BaseLearningModel):
         self.target_teacher.eval()
 
 
-class PIMACV1AEC(PIMACV1Base):
-    """PIMACV1 wrapper for AEC/OpenURB-style environments."""
+class PIMAC(PIMACBase):
+    """PIMAC wrapper for AEC/OpenURB-style environments."""
 
     def act(
         self,
@@ -1216,68 +1354,3 @@ class PIMACV1AEC(PIMACV1Base):
             agent_ids=self._aec_cycle["agent_ids"],
         )
         self._aec_cycle = None
-
-
-class PIMACV1Parallel(PIMACV1Base):
-    """PIMACV1 wrapper for parallel multi-agent environments."""
-
-    def act(
-        self,
-        state: np.ndarray,
-        agent_index: Optional[object] = None,
-    ) -> int:
-        """Single-agent helper for parallel APIs; prefer `act_parallel`."""
-        if agent_index is None:
-            raise ValueError("PIMACV1Parallel.act requires agent_index. Prefer act_parallel for parallel environments.")
-        return self._act_single(state=state, actor_key=agent_index)
-
-    def act_parallel(self, obs_dict: dict) -> dict:
-        """Compute one action per currently present parallel-agent observation."""
-        actions_by_agent_id = {}
-        for agent_id in _sorted_agent_ids(obs_dict.keys()):
-            actions_by_agent_id[agent_id] = self._act_single(
-                state=obs_dict[agent_id],
-                actor_key=agent_id,
-            )
-        return actions_by_agent_id
-
-    @staticmethod
-    def _resolve_parallel_done(done_dict) -> bool:
-        """Normalize heterogeneous parallel done containers to one terminal boolean."""
-        if isinstance(done_dict, dict):
-            if "__all__" in done_dict:
-                return bool(done_dict.get("__all__", False))
-            if not done_dict:
-                return False
-            return all(bool(flag) for flag in done_dict.values())
-        return bool(done_dict)
-
-    def store_parallel_step(
-        self,
-        obs_dict: dict,
-        action_dict: dict,
-        reward_dict: dict,
-        next_obs_dict: dict,
-        done_dict,
-        active_mask_dict: Optional[dict] = None,
-        next_active_mask_dict: Optional[dict] = None,
-        global_state: Optional[np.ndarray] = None,
-        next_global_state: Optional[np.ndarray] = None,
-    ) -> None:
-        """Store one parallel-env joint transition."""
-        episode_done = self._resolve_parallel_done(done_dict)
-        self.store_transition(
-            observations=obs_dict,
-            actions=action_dict,
-            rewards=reward_dict,
-            active_mask=active_mask_dict,
-            global_state=global_state,
-            next_observations=next_obs_dict,
-            next_active_mask=next_active_mask_dict,
-            next_global_state=next_global_state,
-            done=episode_done,
-        )
-
-
-# Compatibility alias for call sites that expect `PIMACV1` directly.
-PIMACV1 = PIMACV1AEC

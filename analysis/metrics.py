@@ -455,12 +455,32 @@ def slice_episodes(df: pd.DataFrame, config: dict) -> dict:
         dict: A dictionary containing the sliced DataFrames.
     """
 
-    hl_episodes = int(config["human_learning_episodes"])
+    effective_hl_episodes = config.get("effective_human_learning_episodes", None)
+    if effective_hl_episodes is None:
+        hl_episodes = int(config["human_learning_episodes"])
+    else:
+        hl_episodes = int(effective_hl_episodes)
     training_eps = int(config["training_eps"])
     dynamic_eps = int(config.get("dynamic_episodes", 0))
 
     training_duration = hl_episodes + training_eps
     dynamic_duration = training_duration + dynamic_eps
+
+    # Pretrained-human runs may skip online human-learning episodes entirely
+    # (`effective_human_learning_episodes == 0`). In that case, episode indexing
+    # starts directly with AV training, so keep the first episodes in training.
+    if hl_episodes <= 0:
+        return {
+            "before_mutation": df.iloc[0:0].copy(),
+            "after_mutation": df.copy(),
+            "testing_frames": df[df["episode"] > dynamic_duration].copy(),
+            "training_frames": df[df["episode"] <= training_duration].copy(),
+            "dynamic_frames": df[
+                (df["episode"] > training_duration)
+                & (df["episode"] <= dynamic_duration)
+            ].copy(),
+        }
+
     return {
         "before_mutation": df[
             (df["episode"] <= hl_episodes)
@@ -1012,16 +1032,18 @@ def process_experiment(exp_id, data_path, skip_collecting=False, no_skip=False, 
     if not os.path.exists(combined_csv_path):
         return f"Error: Combined data file not found at {combined_csv_path}. Cannot extract metrics."
 
-    if "training_eps" in exp_config:
-        computed_training_eps = exp_config["training_eps"]
-    elif "n_iters" in exp_config and "agent_frames_per_batch" in exp_config:
+    computed_training_eps = exp_config.get("training_eps", None)
+    if computed_training_eps is None and "training_episodes" in exp_config:
+        computed_training_eps = exp_config.get("training_episodes")
+    if computed_training_eps is None and "n_iters" in exp_config and "agent_frames_per_batch" in exp_config:
         computed_training_eps = exp_config["n_iters"] * exp_config["agent_frames_per_batch"]
-    else:
+    if computed_training_eps is None:
         print("Warning: Could not determine 'training_eps'. Assuming 0.")
         computed_training_eps = 0
 
     metric_config = {
         "human_learning_episodes": exp_config["human_learning_episodes"],
+        "effective_human_learning_episodes": exp_config.get("effective_human_learning_episodes"),
         "training_eps": computed_training_eps,
         "dynamic_episodes": exp_config.get("dynamic_episodes", 0),
         "test_eps": exp_config.get("test_eps", 0), # Use .get for non-critical keys
