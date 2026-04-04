@@ -547,8 +547,8 @@ if __name__ == "__main__":
     ###############################
     ######## Testing phase ########
     ###############################
-    # Freeze exploration and run deterministic policy for evaluation.
-    qmix.temperature = 0.0
+    # Evaluate with a fixed low-noise Boltzmann policy.
+    qmix.temperature = qmix.temp_min
     qmix.set_eval_mode()
         
     pbar.set_description("Testing")

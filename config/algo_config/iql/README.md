@@ -6,7 +6,7 @@ and `algorithms/iql.py`.
 - `training_eps`: number of training episodes in the AV learning phase.
 - `temp_init`: initial temperature for Boltzmann (softmax) action selection.
 - `temp_decay`: multiplicative temperature decay applied after each learning step.
-- `temp_min`: lower bound for temperature during decay (0 = greedy).
+- `temp_min`: lower bound for temperature during decay. Keep this above zero if evaluation should stay stochastic.
 - `buffer_size`: replay buffer capacity.
 - `batch_size`: number of transitions sampled per DQN update.
 - `lr`: Adam learning rate for the Q-network.

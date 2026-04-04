@@ -459,7 +459,8 @@ if __name__ == "__main__":
     ###############################
     ######## Testing phase ########
     ###############################
-    vdn.temperature = 0.0
+    # Evaluate with a fixed low-noise Boltzmann policy.
+    vdn.temperature = vdn.temp_min
     vdn.set_eval_mode()
 
     pbar.set_description("Testing")

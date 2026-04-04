@@ -662,8 +662,7 @@ class QMIX(BaseLearningModel):
         self.temperature = max(self.temp_min, self.temperature * self.temp_decay)
 
     def set_eval_mode(self) -> None:
-        # Switch networks to eval mode (disables dropout, uses running stats for batchnorm, etc.).
-        # This is typically used for evaluation/testing when you want deterministic behavior.
+        # Switch networks to eval mode without changing the Boltzmann action rule.
         if self.share_parameters:
             self.agent_net.eval()
             self.target_agent_net.eval()

@@ -389,9 +389,9 @@ if __name__ == "__main__":
     ###############################
     ######## Testing phase ########
     ###############################
-    # Make machines deterministic
+    # Evaluate with a fixed low-noise Boltzmann policy.
     for agent in env.machine_agents:
-        agent.model.temperature = 0.0
+        agent.model.temperature = agent.model.temp_min
         agent.model.q_network.eval()
         
     pbar.set_description("Testing")
@@ -489,7 +489,7 @@ if __name__ == "__main__":
             )
             shifts_df.write_csv(shifts_path)
             for switched_agent in env.machine_agents:
-                switched_agent.model.temperature = 0.0
+                switched_agent.model.temperature = switched_agent.model.temp_min
                 switched_agent.model.q_network.eval()
             ##############################
         

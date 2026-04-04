@@ -385,10 +385,9 @@ if __name__ == "__main__":
     ###############################
     ######## Testing phase ########
     ###############################
-    # Make machines deterministic
+    # Keep the same stochastic policy family used during training.
     for agent in env.machine_agents:
         agent.model.policy_net.eval()
-        agent.model.deterministic = True
         
     pbar.set_description("Testing")
     for episode in range(test_eps):
@@ -484,7 +483,6 @@ if __name__ == "__main__":
             shifts_df.write_csv(shifts_path)
             for switched_agent in env.machine_agents:
                 switched_agent.model.policy_net.eval()
-                switched_agent.model.deterministic = True
             ##############################
         
         pbar.update()

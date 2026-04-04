@@ -3,7 +3,7 @@
     "share_parameters": false,
     "temp_init": 0.2,
     "temp_decay": 0.99,
-    "temp_min": 0.0,
+    "temp_min": 0.05,
     "buffer_size": 32,
     "batch_size": 4,
     "lr": 0.001,
@@ -24,4 +24,3 @@
     "use_huber_loss": true,
     "normalize_by_active": true
 }
-

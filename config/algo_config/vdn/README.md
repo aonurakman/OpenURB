@@ -7,7 +7,7 @@ and `algorithms/vdn.py`.
 - `share_parameters`: whether to share a single agent Q-network across all agents.
 - `temp_init`: initial temperature for Boltzmann (softmax) action selection.
 - `temp_decay`: multiplicative temperature decay applied after each learning step.
-- `temp_min`: lower bound for temperature during decay (0 = greedy).
+- `temp_min`: lower bound for temperature during decay. Keep this above zero if evaluation should stay stochastic.
 - `buffer_size`: replay buffer capacity (episodes; single-step is stored as length-1).
 - `batch_size`: number of joint episodes sampled per update.
 - `lr`: Adam learning rate for the agent networks.
@@ -25,4 +25,3 @@ and `algorithms/vdn.py`.
 - `use_huber_loss`: use SmoothL1 (Huber) loss instead of MSE.
 - `normalize_by_active`: if `true`, VDN mixes as an **average** over active agents instead of a raw sum,
   which keeps value scales stable when the AV team size changes (OpenURB setting).
-

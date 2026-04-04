@@ -465,9 +465,8 @@ if __name__ == "__main__":
     ###############################
     ######## Testing phase ########
     ###############################
-    # Switch to deterministic evaluation actions.
+    # Keep policy sampling active during evaluation.
     pimac.set_eval_mode()
-    pimac.deterministic = True
 
     pbar.set_description("Testing")
     for episode in range(test_eps):
