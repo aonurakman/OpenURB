@@ -221,6 +221,7 @@ if __name__ == "__main__":
             "number_of_paths" : number_of_paths,
             "beta" : path_gen_beta,
             "num_samples" : num_samples,
+            "path_gen_workers" : path_gen_workers,
             "visualize_paths" : False
         } 
     )
