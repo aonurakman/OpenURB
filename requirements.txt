@@ -1,4 +1,4 @@
-git+https://github.com/COeXISTENCE-PROJECT/RouteRL-URB.git@openurb
+routerlurb==1.1.0
 matplotlib>=3.9.3
 numpy>=2.0.2
 pandas>=2.2.3
